@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<informationTable>
+    <infoTable>
+        <nameOfIssuer>Apple Inc.</nameOfIssuer>
+        <titleOfClass>COM</titleOfClass>
+        <cusip>037833100</cusip>
+        <value>150000</value>
+        <sshPrnamt>1000000</sshPrnamt>
+        <votingAuthority>
+            <Sole>1000000</Sole>
+            <Shared>0</Shared>
+            <None>0</None>
+        </votingAuthority>
+    </infoTable>
+    <infoTable>
+        <nameOfIssuer>Microsoft Corporation</nameOfIssuer>
+        <titleOfClass>COM</titleOfClass>
+        <cusip>594918104</cusip>
+        <value>120000</value>
+        <sshPrnamt>800000</sshPrnamt>
+        <votingAuthority>
+            <Sole>800000</Sole>
+            <Shared>0</Shared>
+            <None>0</None>
+        </votingAuthority>
+    </infoTable>
+</informationTable>
