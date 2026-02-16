@@ -2,11 +2,27 @@
 数据模型定义
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from typing import Dict, List, Optional, Union
 
 import pandas as pd
+
+
+class AmendmentType(Enum):
+    """13F-HR/A修订类型"""
+    RESTATEMENT = "RESTATEMENT"  # 完全重述，替换原始13F-HR
+    NEW_HOLDINGS = "NEW HOLDINGS"  # 添加新持仓条目
+    UNKNOWN = "UNKNOWN"  # 未知类型
+
+
+@dataclass
+class AmendmentInfo:
+    """修订信息"""
+    filing_date: datetime
+    amendment_type: AmendmentType
+    amendment_number: Optional[int] = None
 
 
 @dataclass
@@ -40,6 +56,10 @@ class Holdings:
     total_value: float  # 总持仓价值
     holdings: List[Holding]
     filing_date: Optional[datetime] = None
+    is_amendment: bool = False  # 是否为修订版本
+    amendment_info: Optional[AmendmentInfo] = None  # 修订信息
+    is_merged: bool = False  # 是否为合并数据
+    amendment_metadata: List[AmendmentInfo] = field(default_factory=list)  # 所有相关修订的元数据
     
     def __post_init__(self):
         """后处理，计算统计信息"""

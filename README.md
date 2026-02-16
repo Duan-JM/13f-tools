@@ -88,6 +88,71 @@ poetry run sec13f-cli info --cik 0001067983 --quarter 2024Q3
   赫芬达尔指数: 892
 ```
 
+## 🔄 13F-HR/A 修订处理
+
+本工具支持智能处理SEC 13F-HR/A修订报告，根据修订类型自动选择正确的数据处理策略：
+
+### 修订类型说明
+
+#### 1. RESTATEMENT（完全重述）
+- **含义**: 完全替换原始13F-HR报告的所有数据
+- **处理**: 使用最新的RESTATEMENT修订数据，忽略原始13F-HR
+- **示例**: 发现原始报告有重大错误，需要重新提交所有持仓数据
+
+#### 2. NEW HOLDINGS（新增持仓）
+- **含义**: 在原始报告基础上添加遗漏的持仓条目
+- **处理**: 将NEW HOLDINGS中的持仓合并到原始13F-HR数据
+- **示例**: 遗漏了某些股票持仓，通过修订补充
+
+#### 3. 混合情况
+- **处理**: 先使用RESTATEMENT数据，然后合并所有NEW HOLDINGS条目
+- **警告**: 系统会记录WARNING日志提醒用户同时存在两种修订类型
+
+### 使用示例
+
+```bash
+# 获取包含修订的季度数据 - 自动处理RESTATEMENT
+poetry run sec13f-cli fetch --cik 0002036346 --quarter 2025Q4
+# 输出: ✓ 发现 1 个RESTATEMENT修订
+#       → 使用RESTATEMENT数据 (提交日期: 2026-02-12)
+
+# 获取NEW HOLDINGS修订 - 自动合并数据
+poetry run sec13f-cli fetch --cik 0002036346 --quarter 2025Q1
+# 输出: ✓ 发现 1 个NEW HOLDINGS修订
+#       → 使用原始13F-HR数据 (提交日期: 2025-05-09)
+#       → 合并NEW HOLDINGS修订 (提交日期: 2025-05-22)
+```
+
+### 技术细节
+
+工具会自动：
+1. 解析`primary_doc.xml`文件确定修订类型
+2. 根据修订类型选择合适的数据处理策略
+3. 处理重复CUSIP（使用修订版本数据）
+4. 重新计算总价值和持仓百分比
+5. 记录所有修订的元数据到`amendment_metadata`字段
+
+### Python API使用
+
+```python
+from sec13f_analyzer import SEC13FDataFetcher
+
+fetcher = SEC13FDataFetcher()
+holdings = fetcher.get_holdings_data('0002036346', '2025Q4')
+
+# 检查是否为修订版本
+if holdings.is_amendment:
+    print(f"修订类型: {holdings.amendment_info.amendment_type.value}")
+    
+# 检查是否为合并数据
+if holdings.is_merged:
+    print("数据已从多个修订合并")
+    
+# 查看所有修订历史
+for meta in holdings.amendment_metadata:
+    print(f"{meta.amendment_type.value} - {meta.filing_date}")
+```
+
 ### 3. 获取持仓数据
 
 ```bash
