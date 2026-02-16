@@ -6,6 +6,7 @@ SEC 13F数据获取模块
 
 import re
 import time
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urljoin
@@ -17,7 +18,7 @@ from loguru import logger
 from tqdm import tqdm
 
 from .config import get_config
-from .models import FundInfo, Holding, Holdings
+from .models import AmendmentInfo, AmendmentType, FundInfo, Holding, Holdings
 
 
 class SEC13FDataFetcher:
@@ -449,9 +450,212 @@ class SEC13FDataFetcher:
             
         return quarter
     
+    def _parse_primary_document(self, filing_url: str) -> Optional[AmendmentInfo]:
+        """
+        解析primary_doc.xml获取修订信息
+        
+        Args:
+            filing_url: 13F报告的主页URL
+            
+        Returns:
+            AmendmentInfo对象，如果解析失败返回None
+        """
+        try:
+            # 获取报告详细页面
+            response = self._make_request(filing_url)
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # 查找primary_doc.xml文件，尝试多个可能的路径
+            primary_doc_urls = []
+            table = soup.find('table', {'class': 'tableFile'})
+            if table:
+                rows = table.find_all('tr')[1:]  # 跳过表头
+                for row in rows:
+                    cells = row.find_all('td')
+                    if len(cells) >= 3:
+                        doc_link = cells[2].find('a')
+                        if doc_link:
+                            href = doc_link.get('href')
+                            if 'primary_doc.xml' in href:
+                                full_url = urljoin(self.BASE_URL, href)
+                                # 优先使用不含xslForm的直接XML路径
+                                if 'xslForm' not in href:
+                                    primary_doc_urls.insert(0, full_url)
+                                else:
+                                    primary_doc_urls.append(full_url)
+            
+            if not primary_doc_urls:
+                logger.warning(f"未找到primary_doc.xml文件: {filing_url}")
+                return None
+            
+            # 尝试每个primary_doc.xml URL
+            for primary_doc_url in primary_doc_urls:
+                try:
+                    # 获取并解析primary_doc.xml
+                    response = self._make_request(primary_doc_url)
+                    
+                    # 检查内容类型，如果是HTML则跳过
+                    content_type = response.headers.get('Content-Type', '').lower()
+                    if 'html' in content_type:
+                        logger.debug(f"跳过HTML版本: {primary_doc_url}")
+                        continue
+                    
+                    root = ET.fromstring(response.content)
+                    
+                    # 定义XML命名空间
+                    namespaces = {
+                        'ns': 'http://www.sec.gov/edgar/thirteenffiler',
+                        'com': 'http://www.sec.gov/edgar/common'
+                    }
+                    
+                    # 提取修订信息
+                    amendment_info_elem = root.find('.//ns:amendmentInfo', namespaces)
+                    if amendment_info_elem is None:
+                        logger.warning(f"primary_doc.xml中未找到amendmentInfo: {primary_doc_url}")
+                        continue
+                    
+                    amendment_type_elem = amendment_info_elem.find('ns:amendmentType', namespaces)
+                    amendment_type_str = amendment_type_elem.text if amendment_type_elem is not None else "UNKNOWN"
+                    
+                    # 映射修订类型
+                    if "RESTATEMENT" in amendment_type_str.upper():
+                        amendment_type = AmendmentType.RESTATEMENT
+                    elif "NEW HOLDINGS" in amendment_type_str.upper():
+                        amendment_type = AmendmentType.NEW_HOLDINGS
+                    else:
+                        logger.warning(f"未知的修订类型: {amendment_type_str}，将作为RESTATEMENT处理")
+                        amendment_type = AmendmentType.UNKNOWN
+                    
+                    # 提取修订编号
+                    amendment_no_elem = root.find('.//ns:amendmentNo', namespaces)
+                    amendment_number = None
+                    if amendment_no_elem is not None and amendment_no_elem.text:
+                        try:
+                            amendment_number = int(amendment_no_elem.text)
+                        except ValueError:
+                            pass
+                    
+                    # 提取提交日期
+                    filing_date_elem = root.find('.//ns:signatureDate', namespaces)
+                    filing_date = datetime.now()
+                    if filing_date_elem is not None and filing_date_elem.text:
+                        try:
+                            filing_date = datetime.strptime(filing_date_elem.text, '%m-%d-%Y')
+                        except ValueError:
+                            pass
+                    
+                    return AmendmentInfo(
+                        filing_date=filing_date,
+                        amendment_type=amendment_type,
+                        amendment_number=amendment_number
+                    )
+                    
+                except ET.ParseError as pe:
+                    logger.debug(f"XML解析失败，尝试下一个URL: {primary_doc_url}, 错误: {pe}")
+                    continue
+            
+            # 所有URL都失败了
+            logger.error(f"无法解析任何primary_doc.xml文件: {filing_url}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"解析primary_doc.xml失败: {filing_url}, 错误: {e}")
+            return None
+    
+    def _categorize_amendments(self, filings: List[Dict]) -> Dict[str, List[Dict]]:
+        """
+        对修订版本进行分类
+        
+        Args:
+            filings: 报告列表，包含is_amendment和amendment_info字段
+            
+        Returns:
+            分类后的字典，包含'original', 'restatement', 'new_holdings'三个键
+        """
+        categorized = {
+            'original': [],
+            'restatement': [],
+            'new_holdings': [],
+            'unknown': []
+        }
+        
+        for filing in filings:
+            if not filing.get('is_amendment'):
+                categorized['original'].append(filing)
+            else:
+                amendment_info = filing.get('amendment_info')
+                if amendment_info:
+                    if amendment_info.amendment_type == AmendmentType.RESTATEMENT:
+                        categorized['restatement'].append(filing)
+                    elif amendment_info.amendment_type == AmendmentType.NEW_HOLDINGS:
+                        categorized['new_holdings'].append(filing)
+                    else:
+                        categorized['unknown'].append(filing)
+        
+        return categorized
+    
+    def _merge_holdings(self, base_holdings: Holdings, additional_holdings: Holdings) -> Holdings:
+        """
+        合并两个Holdings对象（用于NEW HOLDINGS类型的修订）
+        
+        Args:
+            base_holdings: 基础持仓数据（原始13F-HR或RESTATEMENT）
+            additional_holdings: 要添加的持仓数据（NEW HOLDINGS修订）
+            
+        Returns:
+            合并后的Holdings对象
+        """
+        # 创建CUSIP到holding的映射
+        cusip_map = {h.cusip: h for h in base_holdings.holdings}
+        
+        # 添加或更新持仓
+        new_holdings = []
+        for holding in additional_holdings.holdings:
+            if holding.cusip in cusip_map:
+                # CUSIP重复，使用新数据（修订版本优先）
+                logger.info(f"合并时发现重复CUSIP {holding.cusip}，使用修订版本数据")
+                cusip_map[holding.cusip] = holding
+            else:
+                # 新的CUSIP
+                new_holdings.append(holding)
+        
+        # 合并所有持仓
+        all_holdings = list(cusip_map.values()) + new_holdings
+        
+        # 重新计算总价值
+        total_value = sum(h.market_value for h in all_holdings)
+        
+        # 重新计算百分比
+        for holding in all_holdings:
+            if total_value > 0:
+                holding.percentage_of_portfolio = (holding.market_value / total_value) * 100
+            else:
+                holding.percentage_of_portfolio = 0.0
+        
+        # 创建合并后的Holdings对象
+        merged = Holdings(
+            cik=base_holdings.cik,
+            fund_name=base_holdings.fund_name,
+            quarter=base_holdings.quarter,
+            period_end_date=base_holdings.period_end_date,
+            total_value=total_value,
+            holdings=all_holdings,
+            filing_date=base_holdings.filing_date,
+            is_amendment=True,
+            is_merged=True,
+            amendment_metadata=base_holdings.amendment_metadata + additional_holdings.amendment_metadata
+        )
+        
+        return merged
+    
     def get_holdings_data(self, cik: str, quarter: str) -> Optional[Holdings]:
         """
-        获取指定季度的13F持仓数据
+        获取指定季度的13F持仓数据，支持处理13F-HR/A修订版本
+        
+        修订处理逻辑：
+        - RESTATEMENT: 使用最新的RESTATEMENT修订数据（完全替换原始数据）
+        - NEW HOLDINGS: 将新持仓条目合并到原始13F-HR数据中
+        - 混合情况: 使用RESTATEMENT数据，然后合并NEW HOLDINGS条目
         
         Args:
             cik: 基金的CIK编号
@@ -470,28 +674,97 @@ class SEC13FDataFetcher:
             logger.warning(f"未找到 CIK {cik} 在 {quarter} 的13F报告")
             return None
         
-        # 分析该季度的报告类型
-        hr_filings = [f for f in quarter_filings if not f['is_amendment']]
-        hra_filings = [f for f in quarter_filings if f['is_amendment']]
+        # 解析所有13F-HR/A的primary_doc.xml以获取修订类型
+        logger.info(f"发现 {len(quarter_filings)} 个13F报告文件")
+        for filing in quarter_filings:
+            if filing['is_amendment']:
+                amendment_info = self._parse_primary_document(filing['url'])
+                filing['amendment_info'] = amendment_info
+                if amendment_info:
+                    logger.info(f"  13F-HR/A ({filing['filing_date'].strftime('%Y-%m-%d')}): {amendment_info.amendment_type.value}")
         
-        # 检查是否存在修订版本并发出警告
-        if hra_filings:
-            hra_dates = [f['filing_date'].strftime('%Y-%m-%d') for f in hra_filings]
-            logger.warning(f"⚠️  CIK {cik} 在 {quarter} 季度存在13F-HR/A修订版本 (提交日期: {', '.join(hra_dates)})，建议人工检查原始报告和修订版本的差异")
+        # 对修订版本进行分类
+        categorized = self._categorize_amendments(quarter_filings)
         
-        # 选择目标报告：优先使用13F-HR，如果没有则跳过该季度
-        target_filing = None
-        if hr_filings:
-            # 如果有多个13F-HR，选择最新的
-            target_filing = max(hr_filings, key=lambda x: x['filing_date'])
-            logger.info(f"选择13F-HR报告 (提交日期: {target_filing['filing_date'].strftime('%Y-%m-%d')})")
+        original_filings = categorized['original']
+        restatement_filings = categorized['restatement']
+        new_holdings_filings = categorized['new_holdings']
+        unknown_filings = categorized['unknown']
+        
+        # 日志记录
+        if restatement_filings:
+            logger.info(f"✓ 发现 {len(restatement_filings)} 个RESTATEMENT修订")
+        if new_holdings_filings:
+            logger.info(f"✓ 发现 {len(new_holdings_filings)} 个NEW HOLDINGS修订")
+        if unknown_filings:
+            logger.warning(f"⚠️ 发现 {len(unknown_filings)} 个未知类型修订，将作为RESTATEMENT处理")
+        
+        # 警告：同时存在RESTATEMENT和NEW HOLDINGS
+        if restatement_filings and new_holdings_filings:
+            logger.warning(f"⚠️ WARNING: CIK {cik} 在 {quarter} 同时存在RESTATEMENT和NEW HOLDINGS修订，将先使用RESTATEMENT数据，然后合并NEW HOLDINGS条目")
+        
+        # 决定使用哪个报告作为基础
+        base_filing = None
+        base_holdings = None
+        amendment_metadata = []
+        
+        # 优先级：最新的RESTATEMENT > 原始13F-HR > 无
+        if restatement_filings or unknown_filings:
+            # 使用最新的RESTATEMENT（或未知类型修订）
+            all_restatements = restatement_filings + unknown_filings
+            base_filing = max(all_restatements, key=lambda x: x['filing_date'])
+            logger.info(f"→ 使用RESTATEMENT数据 (提交日期: {base_filing['filing_date'].strftime('%Y-%m-%d')})")
+            base_holdings = self._fetch_and_parse_filing(base_filing, cik, quarter)
+            if base_holdings and base_filing.get('amendment_info'):
+                base_holdings.is_amendment = True
+                base_holdings.amendment_info = base_filing['amendment_info']
+                amendment_metadata.append(base_filing['amendment_info'])
+        elif original_filings:
+            # 使用原始13F-HR
+            base_filing = max(original_filings, key=lambda x: x['filing_date'])
+            logger.info(f"→ 使用原始13F-HR数据 (提交日期: {base_filing['filing_date'].strftime('%Y-%m-%d')})")
+            base_holdings = self._fetch_and_parse_filing(base_filing, cik, quarter)
         else:
-            # 只有13F-HR/A，跳过并警告
-            logger.warning(f"❌ CIK {cik} 在 {quarter} 季度只有13F-HR/A修订版本，跳过该季度。建议人工检查修订版本内容。")
+            # 只有NEW HOLDINGS修订，没有原始报告
+            logger.error(f"❌ CIK {cik} 在 {quarter} 只有NEW HOLDINGS修订但缺少原始13F-HR或RESTATEMENT数据")
             return None
         
+        if not base_holdings:
+            logger.error(f"解析基础报告失败")
+            return None
+        
+        # 合并NEW HOLDINGS修订
+        if new_holdings_filings:
+            # 按提交日期排序，依次合并
+            new_holdings_filings.sort(key=lambda x: x['filing_date'])
+            for nh_filing in new_holdings_filings:
+                logger.info(f"→ 合并NEW HOLDINGS修订 (提交日期: {nh_filing['filing_date'].strftime('%Y-%m-%d')})")
+                nh_holdings = self._fetch_and_parse_filing(nh_filing, cik, quarter)
+                if nh_holdings:
+                    base_holdings = self._merge_holdings(base_holdings, nh_holdings)
+                    if nh_filing.get('amendment_info'):
+                        amendment_metadata.append(nh_filing['amendment_info'])
+        
+        # 更新amendment_metadata
+        if amendment_metadata:
+            base_holdings.amendment_metadata = amendment_metadata
+        
+        return base_holdings
+    
+    def _fetch_and_parse_filing(self, filing: Dict, cik: str, quarter: str) -> Optional[Holdings]:
+        """
+        获取并解析单个13F报告文件
+        
+        Args:
+            filing: 报告信息字典
+            cik: 基金CIK
+            quarter: 季度
+            
+        Returns:
+            Holdings对象或None
+        """
         # 获取报告详细页面
-        response = self._make_request(target_filing['url'])
+        response = self._make_request(filing['url'])
         soup = BeautifulSoup(response.content, 'html.parser')
         
         # 查找13F-HR表格链接
@@ -538,7 +811,7 @@ class SEC13FDataFetcher:
             for href, text, context in document_links:
                 if pattern_func(href, text, context):
                     table_link = urljoin(self.BASE_URL, href)
-                    logger.info(f"找到13F-HR文件 ({pattern_desc}): {text} -> {table_link}")
+                    logger.debug(f"找到13F文件 ({pattern_desc}): {text} -> {table_link}")
                     break
             if table_link:
                 break
@@ -547,14 +820,13 @@ class SEC13FDataFetcher:
         if not table_link:
             # 查找第一个.xml文件
             for href, text, context in document_links:
-                if href.endswith('.xml'):
+                if href.endswith('.xml') and 'primary_doc' not in href:
                     table_link = urljoin(self.BASE_URL, href)
-                    logger.info(f"备选文件: {text} -> {table_link}")
+                    logger.debug(f"备选文件: {text} -> {table_link}")
                     break
         
         if not table_link:
-            logger.error(f"未找到 {quarter} 的13F-HR表格文件")
-            logger.debug(f"可用的文档链接: {document_links}")
+            logger.error(f"未找到 {quarter} 的13F表格文件")
             return None
         
         # 下载并解析持仓数据
