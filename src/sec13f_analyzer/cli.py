@@ -106,10 +106,11 @@ def fetch(ctx, cik, quarter, output, output_format):
         top_20 = analyzer.get_top_holdings(cik, quarter, 20)
         if top_20:
             click.echo(f"\n前20大持仓:")
-            click.echo("-" * 80)
+            click.echo("-" * 100)
             for i, holding in enumerate(top_20, 1):
                 percentage = (holding.market_value / holdings.total_value) * 100
-                click.echo(f"{i:2d}. {holding.issuer_name[:40]:40s} ${holding.market_value:>12,.0f} ({percentage:5.2f}%)")
+                security_class = f"({holding.security_class})" if holding.security_class else ""
+                click.echo(f"{i:2d}. {holding.issuer_name[:35]:35s} {security_class:20s} ${holding.market_value:>12,.0f} ({percentage:5.2f}%)")
         
     except Exception as e:
         logger.error(f"获取持仓数据失败: {e}")
@@ -159,16 +160,17 @@ def analyze(ctx, cik, from_quarter, to_quarter, output, output_format, show_plot
 
         # if significant_changes:
         click.echo(f"\n持仓变动")
-        click.echo("-" * 90)
+        click.echo("-" * 110)
         for change in all_changes:
             change_desc = {
                 'new': '新增',
-                'closed': '清仓', 
+                'closed': '清仓',
                 'increased': '增持',
                 'decreased': '减持'
             }.get(change.change_type, change.change_type)
-            
-            click.echo(f"{change_desc:4s} {change.issuer_name[:40]:40s} ${change.value_change:>12,.0f}")
+
+            security_class = f"({change.security_class})" if change.security_class else ""
+            click.echo(f"{change_desc:4s} {change.issuer_name[:35]:35s} {security_class:20s} ${change.value_change:>12,.0f}")
         
         # 导出数据
         if output or ctx.obj['verbose']:

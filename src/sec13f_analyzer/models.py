@@ -110,9 +110,10 @@ class HoldingChange:
     cusip: str
     issuer_name: str
     change_type: str  # 'new', 'increased', 'decreased', 'closed', 'unchanged'
+    security_class: Optional[str] = None  # 证券类别，如 "COM", "CLASS A", "CLASS C"
     prev_shares: Optional[int] = None
     curr_shares: Optional[int] = None
-    prev_value: Optional[float] = None  
+    prev_value: Optional[float] = None
     curr_value: Optional[float] = None
     shares_change: Optional[int] = None
     value_change: Optional[float] = None
@@ -180,16 +181,17 @@ class HoldingsChange:
             data.append({
                 'cusip': change.cusip,
                 'issuer_name': change.issuer_name,
+                'security_class': change.security_class,
                 'change_type': change.change_type,
                 'prev_shares': change.prev_shares,
-                'curr_shares': change.curr_shares, 
+                'curr_shares': change.curr_shares,
                 'prev_value': change.prev_value,
                 'curr_value': change.curr_value,
                 'shares_change': change.shares_change,
                 'value_change': change.value_change,
                 'percentage_change': change.percentage_change,
             })
-        
+
         df = pd.DataFrame(data)
         df['fund_name'] = self.fund_name
         df['cik'] = self.cik

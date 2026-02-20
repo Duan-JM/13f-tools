@@ -4,7 +4,7 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
 name = "sec13f-analyzer"
-version = "0.1.0"
+version = "0.1.1"
 description = "SEC 13F持仓分析工具，用于追踪机构投资者持仓变动"
 authors = ["Vincent Duan <vincent.duan95@outlook.com>"]
 maintainers = ["Vincent Duan <vincent.duan95@outlook.com>"]

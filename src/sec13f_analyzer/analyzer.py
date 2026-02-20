@@ -150,6 +150,7 @@ class SEC13FAnalyzer:
                 change = HoldingChange(
                     cusip=cusip,
                     issuer_name=curr_holding.issuer_name,
+                    security_class=curr_holding.security_class,
                     change_type=change_type,
                     prev_shares=prev_holding.shares_owned,
                     curr_shares=curr_holding.shares_owned,
@@ -162,6 +163,7 @@ class SEC13FAnalyzer:
                 change = HoldingChange(
                     cusip=cusip,
                     issuer_name=prev_holding.issuer_name,
+                    security_class=prev_holding.security_class,
                     change_type="closed",
                     prev_shares=prev_holding.shares_owned,
                     curr_shares=0,
@@ -174,6 +176,7 @@ class SEC13FAnalyzer:
                 change = HoldingChange(
                     cusip=cusip,
                     issuer_name=curr_holding.issuer_name,
+                    security_class=curr_holding.security_class,
                     change_type="new",
                     prev_shares=0,
                     curr_shares=curr_holding.shares_owned,

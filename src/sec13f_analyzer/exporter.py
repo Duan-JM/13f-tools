@@ -141,16 +141,18 @@ class DataExporter:
                 new_df = pd.DataFrame([{
                     'CUSIP': c.cusip,
                     '发行人': c.issuer_name,
+                    '证券类别': c.security_class,
                     '持股数量': c.curr_shares,
                     '市值 (美元)': c.curr_value,
                 } for c in holdings_change.new_positions])
                 new_df.to_excel(writer, sheet_name='新增持仓', index=False)
-            
+
             # 清仓持仓
             if holdings_change.closed_positions:
                 closed_df = pd.DataFrame([{
                     'CUSIP': c.cusip,
                     '发行人': c.issuer_name,
+                    '证券类别': c.security_class,
                     '原持股数量': c.prev_shares,
                     '原市值 (美元)': c.prev_value,
                 } for c in holdings_change.closed_positions])
@@ -165,6 +167,7 @@ class DataExporter:
                 change_df = pd.DataFrame([{
                     'CUSIP': c.cusip,
                     '发行人': c.issuer_name,
+                    '证券类别': c.security_class,
                     '变动类型': c.change_type,
                     '原持股数量': c.prev_shares,
                     '当前持股数量': c.curr_shares,
@@ -318,6 +321,7 @@ class DataExporter:
                     {
                         'cusip': c.cusip,
                         'issuer_name': c.issuer_name,
+                        'security_class': c.security_class,
                         'change_type': c.change_type,
                         'prev_shares': c.prev_shares,
                         'curr_shares': c.curr_shares,
