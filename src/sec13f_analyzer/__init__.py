@@ -14,7 +14,7 @@ from .visualizer import HoldingsVisualizer
 
 __all__ = [
     "SEC13FAnalyzer",
-    "SEC13FDataFetcher", 
+    "SEC13FDataFetcher",
     "Holdings",
     "HoldingsChange",
     "HoldingsVisualizer",

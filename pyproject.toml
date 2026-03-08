@@ -23,7 +23,7 @@ readme = "README.md"
 license = "Apache-2.0"
 
 [tool.poetry.scripts]
-sec13f-cli = "sec13f_analyzer.cli:main"
+sec13f-cli = "sec13f_analyzer.cli:cli"
 
 [tool.poetry.dependencies]
 python = "^3.10"
