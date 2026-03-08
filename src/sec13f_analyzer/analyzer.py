@@ -117,9 +117,7 @@ class SEC13FAnalyzer:
         curr_holdings = self.get_holdings(cik, to_quarter)
 
         if not prev_holdings or not curr_holdings:
-            logger.error(
-                f"无法获取 CIK {cik} 在 {from_quarter} 或 {to_quarter} 的持仓数据"
-            )
+            logger.error(f"无法获取 CIK {cik} 在 {from_quarter} 或 {to_quarter} 的持仓数据")
             return None
 
         # 创建CUSIP到持仓的映射
