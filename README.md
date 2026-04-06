@@ -9,10 +9,11 @@
 
 ## ✨ 核心功能
 
-- � **基金搜索**: 根据基金名称快速查找CIK编号
+- 🔍 **基金搜索**: 根据基金名称快速查找CIK编号
 - 📊 **持仓获取**: 实时获取SEC 13F报告持仓数据
 - 📈 **变动分析**: 精确追踪季度间持仓变化
 - 📋 **数据导出**: 支持Excel、CSV、JSON多种格式
+- 🔔 **监控服务**: 自动监控投资组合的13F报告更新并发送通知
 
 ## 📦 快速安装
 
@@ -92,6 +93,67 @@ poetry run sec13f-cli analyze --cik 0001067983 --from-quarter 2024Q2 --to-quarte
 # 分析变动并显示图表
 poetry run sec13f-cli analyze --cik 0001067983 --from-quarter 2024Q2 --to-quarter 2024Q3 --show-plot
 ```
+
+### 5. 启动监控服务
+
+监控服务可以自动检测投资组合的13F报告更新，并通过飞书等平台发送通知。
+
+#### 5.1 创建配置文件
+
+首先复制示例配置文件并编辑:
+
+```bash
+# 复制示例配置
+cp monitor_config.example.yml monitor_config.yml
+
+# 编辑配置文件
+vim monitor_config.yml
+```
+
+配置文件示例:
+
+```yaml
+service:
+  check_interval: 60  # 检查间隔（分钟）
+  user_agent: "SEC13F-Monitor/1.0.0"
+  state_file: ".monitor_state.json"
+
+portfolios:
+  - name: "伯克希尔哈撒韦"
+    cik: "0001067983"
+    enabled: true
+    min_report_days: 30
+
+  - name: "桥水基金"
+    cik: "0001350694"
+    enabled: true
+    min_report_days: 30
+
+webhooks:
+  - name: "飞书通知"
+    type: "feishu"
+    url: "https://open.feishu.cn/open-apis/bot/v2/hook/YOUR_WEBHOOK_TOKEN"
+    enabled: true
+    send_test_on_start: false
+
+notification:
+  include_holdings_summary: true
+  max_holdings_in_summary: 10
+  include_report_link: true
+```
+
+#### 5.2 启动监控
+
+```bash
+# 启动监控服务
+poetry run sec13f-cli monitor --config monitor_config.yml
+```
+
+服务将:
+- 定期检查配置的投资组合的13F报告
+- 发现新报告时自动发送通知到飞书
+- 保存检查状态，避免重复通知
+- 可通过 Ctrl+C 优雅停止
 
 ### 免责声明
 

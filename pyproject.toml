@@ -42,6 +42,7 @@ openpyxl = "^3.1.2"
 tqdm = "^4.66.4"
 python-dateutil = "^2.8.2"
 ipdb = "^0.13.13"
+pyyaml = "^6.0.1"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.3"

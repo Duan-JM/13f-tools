@@ -12,6 +12,8 @@ from loguru import logger
 from .analyzer import SEC13FAnalyzer
 from .data_fetcher import SEC13FDataFetcher
 from .exporter import DataExporter
+from .monitor import SEC13FMonitor
+from .monitor_config import MonitorConfigLoader
 from .visualizer import HoldingsVisualizer
 
 
@@ -270,4 +272,47 @@ def info(ctx, cik, quarter):
 
     except Exception as e:
         logger.error(f"获取基金信息失败: {e}")
+        sys.exit(1)
+
+
+@cli.command()
+@click.option(
+    "--config",
+    "-c",
+    required=True,
+    type=click.Path(exists=True),
+    help="监控配置文件路径（YAML格式）",
+)
+@click.pass_context
+def monitor(ctx, config):
+    """启动 13F 监控服务"""
+    try:
+        # 加载配置
+        click.echo(f"正在加载配置文件: {config}")
+        monitor_config = MonitorConfigLoader.load(config)
+
+        click.echo("配置验证通过")
+        click.echo(f"监控的投资组合:")
+        for portfolio in monitor_config.enabled_portfolios:
+            click.echo(f"  - {portfolio.name} (CIK: {portfolio.cik})")
+
+        click.echo(f"启用的 webhook:")
+        for webhook in monitor_config.enabled_webhooks:
+            click.echo(f"  - {webhook.name} ({webhook.type})")
+
+        click.echo("\n准备启动监控服务...")
+
+        # 创建并启动监控服务
+        monitor_service = SEC13FMonitor(monitor_config)
+        monitor_service.start()
+
+    except FileNotFoundError as e:
+        logger.error(f"配置文件不存在: {e}")
+        click.echo("请使用 --config 参数指定有效的配置文件")
+        sys.exit(1)
+    except ValueError as e:
+        logger.error(f"配置文件错误: {e}")
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"监控服务启动失败: {e}")
         sys.exit(1)
