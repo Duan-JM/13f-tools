@@ -2,7 +2,6 @@
 测试通知器
 """
 
-import pytest
 import responses
 
 from sec13f_analyzer.notifier import (

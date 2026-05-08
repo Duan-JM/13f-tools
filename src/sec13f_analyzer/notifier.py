@@ -4,7 +4,6 @@ Webhook 通知模块
 实现飞书等平台的 webhook 消息推送
 """
 
-import json
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -19,7 +18,7 @@ class NotificationMessage:
 
     title: str
     content: str
-    timestamp: datetime = None
+    timestamp: Optional[datetime] = None
 
     def __post_init__(self):
         if self.timestamp is None:
@@ -156,7 +155,10 @@ class FeishuWebhookNotifier(WebhookNotifier):
                             # 添加链接前的文本
                             if match.start() > last_end:
                                 paragraph.append(
-                                    {"tag": "text", "text": part[last_end : match.start()]}
+                                    {
+                                        "tag": "text",
+                                        "text": part[last_end : match.start()],
+                                    }
                                 )
                             # 添加链接
                             paragraph.append(
@@ -240,9 +242,7 @@ class NotificationBuilder:
                 name = holding.get("name", "")
                 value = holding.get("value", 0)
                 percentage = holding.get("percentage", 0)
-                content_parts.append(
-                    f"{i}. {name}: ${value:,.0f} ({percentage:.2f}%)"
-                )
+                content_parts.append(f"{i}. {name}: ${value:,.0f} ({percentage:.2f}%)")
 
         # 添加报告链接
         if report_url:

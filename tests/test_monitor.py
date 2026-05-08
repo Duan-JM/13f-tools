@@ -2,7 +2,6 @@
 测试监控服务
 """
 
-import json
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -28,9 +27,7 @@ def sample_monitor_config():
     )
 
     portfolios = [
-        PortfolioConfig(
-            name="测试基金", cik="0001234567", enabled=True, min_report_days=30
-        )
+        PortfolioConfig(name="测试基金", cik="0001234567", enabled=True, min_report_days=30)
     ]
 
     webhooks = [

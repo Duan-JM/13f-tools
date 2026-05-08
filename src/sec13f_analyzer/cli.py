@@ -87,7 +87,7 @@ def fetch(ctx, cik, quarter, output, output_format):
             sys.exit(1)
 
         # 显示基本信息
-        click.echo(f"\n✓ 成功获取持仓数据:")
+        click.echo("\n✓ 成功获取持仓数据:")
         click.echo(f"  基金名称: {holdings.fund_name}")
         click.echo(f"  报告季度: {holdings.quarter}")
         click.echo(f"  期末日期: {holdings.period_end_date.strftime('%Y-%m-%d')}")
@@ -110,7 +110,7 @@ def fetch(ctx, cik, quarter, output, output_format):
         # 显示前20大持仓
         top_20 = analyzer.get_top_holdings(cik, quarter, 20)
         if top_20:
-            click.echo(f"\n前20大持仓:")
+            click.echo("\n前20大持仓:")
             click.echo("-" * 100)
             for i, holding in enumerate(top_20, 1):
                 percentage = (holding.market_value / holdings.total_value) * 100
@@ -157,7 +157,7 @@ def analyze(ctx, cik, from_quarter, to_quarter, output, output_format, show_plot
             sys.exit(1)
 
         # 显示变动统计
-        click.echo(f"\n✓ 持仓变动分析结果:")
+        click.echo("\n✓ 持仓变动分析结果:")
         click.echo(f"  基金名称: {holdings_change.fund_name}")
         click.echo(
             f"  分析期间: {holdings_change.from_quarter} → {holdings_change.to_quarter}"
@@ -168,7 +168,7 @@ def analyze(ctx, cik, from_quarter, to_quarter, output, output_format, show_plot
             f"  总价值变动: ${holdings_change.total_value_change:,.0f} ({holdings_change.total_percentage_change:+.2f}%)"
         )
 
-        click.echo(f"\n变动统计:")
+        click.echo("\n变动统计:")
         click.echo(f"  新增持仓: {len(holdings_change.new_positions)} 个")
         click.echo(f"  清仓持仓: {len(holdings_change.closed_positions)} 个")
         click.echo(f"  增持股票: {len(holdings_change.increased_positions)} 个")
@@ -183,7 +183,7 @@ def analyze(ctx, cik, from_quarter, to_quarter, output, output_format, show_plot
         )
 
         # if significant_changes:
-        click.echo(f"\n持仓变动")
+        click.echo("\n持仓变动")
         click.echo("-" * 110)
         for change in all_changes:
             change_desc = {
@@ -242,7 +242,7 @@ def info(ctx, cik, quarter):
         # 获取基金信息
         fund_info = analyzer.data_fetcher.get_fund_info(cik)
         if fund_info:
-            click.echo(f"\n基金基本信息:")
+            click.echo("\n基金基本信息:")
             click.echo(f"  CIK编号: {fund_info.cik}")
             click.echo(f"  基金名称: {fund_info.fund_name}")
             if fund_info.business_address:
@@ -263,7 +263,7 @@ def info(ctx, cik, quarter):
         # 获取历史报告列表
         filings = analyzer.data_fetcher.get_13f_filings(cik, years=2)
         if filings:
-            click.echo(f"\n最近的13F报告:")
+            click.echo("\n最近的13F报告:")
             click.echo("-" * 50)
             for filing in filings[:10]:  # 显示最近10个
                 click.echo(
@@ -292,11 +292,11 @@ def monitor(ctx, config):
         monitor_config = MonitorConfigLoader.load(config)
 
         click.echo("配置验证通过")
-        click.echo(f"监控的投资组合:")
+        click.echo("监控的投资组合:")
         for portfolio in monitor_config.enabled_portfolios:
             click.echo(f"  - {portfolio.name} (CIK: {portfolio.cik})")
 
-        click.echo(f"启用的 webhook:")
+        click.echo("启用的 webhook:")
         for webhook in monitor_config.enabled_webhooks:
             click.echo(f"  - {webhook.name} ({webhook.type})")
 

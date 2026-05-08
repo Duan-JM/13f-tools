@@ -3,12 +3,12 @@
 """
 
 from datetime import datetime
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import pytest
 
 from sec13f_analyzer.analyzer import SEC13FAnalyzer
-from sec13f_analyzer.models import Holding, HoldingChange, Holdings, HoldingsChange
+from sec13f_analyzer.models import Holding, Holdings
 
 
 class TestSEC13FAnalyzer:

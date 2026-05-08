@@ -7,7 +7,7 @@
 import json
 import os
 from datetime import datetime
-from typing import Dict, List, Optional, Union
+from typing import Optional, Union
 
 import pandas as pd
 from loguru import logger

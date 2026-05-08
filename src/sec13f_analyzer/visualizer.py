@@ -7,7 +7,6 @@
 from typing import Tuple
 
 import matplotlib.pyplot as plt
-import seaborn as sns
 
 from .models import HoldingsChange
 
@@ -82,14 +81,14 @@ class HoldingsVisualizer:
 
         # 新增持仓
         if new_positions:
-            top_new = sorted(new_positions, key=lambda x: x.curr_value, reverse=True)[
-                : top_n // 3
-            ]
+            top_new = sorted(
+                new_positions, key=lambda x: x.curr_value or 0.0, reverse=True
+            )[: top_n // 3]
             names = [
                 c.issuer_name[:15] + "..." if len(c.issuer_name) > 15 else c.issuer_name
                 for c in top_new
             ]
-            values = [c.curr_value / 1e6 for c in top_new]
+            values = [(c.curr_value or 0.0) / 1e6 for c in top_new]
 
             bars = ax1.barh(names, values, color="green", alpha=0.7)
             ax1.set_title(f"新增持仓 (前{len(top_new)}个)", fontweight="bold")
@@ -107,13 +106,13 @@ class HoldingsVisualizer:
         # 清仓持仓
         if closed_positions:
             top_closed = sorted(
-                closed_positions, key=lambda x: x.prev_value, reverse=True
+                closed_positions, key=lambda x: x.prev_value or 0.0, reverse=True
             )[: top_n // 3]
             names = [
                 c.issuer_name[:15] + "..." if len(c.issuer_name) > 15 else c.issuer_name
                 for c in top_closed
             ]
-            values = [c.prev_value / 1e6 for c in top_closed]
+            values = [(c.prev_value or 0.0) / 1e6 for c in top_closed]
 
             bars = ax2.barh(names, values, color="red", alpha=0.7)
             ax2.set_title(f"清仓持仓 (前{len(top_closed)}个)", fontweight="bold")
@@ -131,13 +130,15 @@ class HoldingsVisualizer:
         # 增持
         if increased_positions:
             top_increased = sorted(
-                increased_positions, key=lambda x: x.value_change, reverse=True
+                increased_positions,
+                key=lambda x: x.value_change or 0.0,
+                reverse=True,
             )[: top_n // 3]
             names = [
                 c.issuer_name[:15] + "..." if len(c.issuer_name) > 15 else c.issuer_name
                 for c in top_increased
             ]
-            values = [c.value_change / 1e6 for c in top_increased]
+            values = [(c.value_change or 0.0) / 1e6 for c in top_increased]
 
             bars = ax3.barh(names, values, color="blue", alpha=0.7)
             ax3.set_title(f"增持幅度最大 (前{len(top_increased)}个)", fontweight="bold")
@@ -155,13 +156,15 @@ class HoldingsVisualizer:
         # 减持
         if decreased_positions:
             top_decreased = sorted(
-                decreased_positions, key=lambda x: abs(x.value_change), reverse=True
+                decreased_positions,
+                key=lambda x: abs(x.value_change or 0.0),
+                reverse=True,
             )[: top_n // 3]
             names = [
                 c.issuer_name[:15] + "..." if len(c.issuer_name) > 15 else c.issuer_name
                 for c in top_decreased
             ]
-            values = [abs(c.value_change) / 1e6 for c in top_decreased]
+            values = [abs(c.value_change or 0.0) / 1e6 for c in top_decreased]
 
             bars = ax4.barh(names, values, color="orange", alpha=0.7)
             ax4.set_title(f"减持幅度最大 (前{len(top_decreased)}个)", fontweight="bold")

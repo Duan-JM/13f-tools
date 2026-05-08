@@ -6,7 +6,6 @@
 
 import json
 import signal
-import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -89,7 +88,8 @@ class MonitorState:
         Returns:
             str: 季度字符串，如 "2024Q3"
         """
-        return self.state.get(cik, {}).get("last_quarter")
+        last_quarter = self.state.get(cik, {}).get("last_quarter")
+        return last_quarter if isinstance(last_quarter, str) else None
 
     def update(self, cik: str, quarter: Optional[str] = None):
         """
@@ -137,7 +137,7 @@ class SEC13FMonitor:
 
     def _create_notifiers(self) -> list[WebhookNotifier]:
         """创建通知器列表"""
-        notifiers = []
+        notifiers: list[WebhookNotifier] = []
 
         for webhook in self.config.enabled_webhooks:
             if webhook.type == "feishu":
@@ -180,9 +180,7 @@ class SEC13FMonitor:
             logger.info(f"检查 {portfolio.name} (CIK: {portfolio.cik}) 的 13F 报告...")
 
             # 获取最近的 13F 报告列表
-            filings = self.analyzer.data_fetcher.get_13f_filings(
-                portfolio.cik, years=1
-            )
+            filings = self.analyzer.data_fetcher.get_13f_filings(portfolio.cik, years=1)
 
             if not filings:
                 logger.info(f"未找到 {portfolio.name} 的 13F 报告")
@@ -197,9 +195,7 @@ class SEC13FMonitor:
             last_quarter = self.state.get_last_quarter(portfolio.cik)
 
             if last_quarter == latest_quarter:
-                logger.debug(
-                    f"{portfolio.name} 没有新报告（最新: {latest_quarter}）"
-                )
+                logger.debug(f"{portfolio.name} 没有新报告（最新: {latest_quarter}）")
                 self.state.update(portfolio.cik)
                 return False
 
@@ -208,9 +204,7 @@ class SEC13FMonitor:
             if last_check:
                 days_since_last = (datetime.now() - last_check).days
                 if days_since_last < portfolio.min_report_days:
-                    logger.debug(
-                        f"{portfolio.name} 距上次检查仅 {days_since_last} 天，跳过"
-                    )
+                    logger.debug(f"{portfolio.name} 距上次检查仅 {days_since_last} 天，跳过")
                     return False
 
             logger.info(
@@ -325,9 +319,7 @@ class SEC13FMonitor:
                 next_check = datetime.now() + timedelta(
                     minutes=self.config.service.check_interval
                 )
-                logger.info(
-                    f"下次检查时间: {next_check.strftime('%Y-%m-%d %H:%M:%S')}"
-                )
+                logger.info(f"下次检查时间: {next_check.strftime('%Y-%m-%d %H:%M:%S')}")
 
                 # 等待下次检查
                 sleep_seconds = self.config.service.check_interval * 60

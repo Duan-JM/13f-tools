@@ -3,13 +3,11 @@
 """
 
 from datetime import datetime
-from unittest.mock import Mock, patch
 
 import pytest
 import responses
 
 from sec13f_analyzer.data_fetcher import SEC13FDataFetcher
-from sec13f_analyzer.models import FundInfo, Holding, Holdings
 
 
 class TestSEC13FDataFetcher:

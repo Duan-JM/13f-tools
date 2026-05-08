@@ -28,10 +28,10 @@ class SEC13FDataFetcher:
 
     def __init__(
         self,
-        user_agent: str = None,
-        company_name: str = None,
-        email: str = None,
-        config_file: str = None,
+        user_agent: Optional[str] = None,
+        company_name: Optional[str] = None,
+        email: Optional[str] = None,
+        config_file: Optional[str] = None,
     ):
         """
         初始化数据获取器
@@ -779,7 +779,7 @@ class SEC13FDataFetcher:
             return None
 
         if not base_holdings:
-            logger.error(f"解析基础报告失败")
+            logger.error("解析基础报告失败")
             return None
 
         # 合并NEW HOLDINGS修订
