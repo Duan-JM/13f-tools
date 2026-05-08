@@ -5,6 +5,7 @@
 from datetime import datetime
 
 import pytest
+from matplotlib import pyplot as plt
 
 from sec13f_analyzer.models import Holding, HoldingChange, Holdings, HoldingsChange
 from sec13f_analyzer.visualizer import HoldingsVisualizer
@@ -43,29 +44,54 @@ class TestHoldingsVisualizer:
         """创建示例持仓变动数据"""
         changes = [
             HoldingChange(
-                "037833100",
-                "APPLE INC",
-                "increased",
-                800000,
-                1000000,
-                120000000.0,
-                150000000.0,
+                cusip="037833100",
+                issuer_name="APPLE INC",
+                change_type="increased",
+                security_class="COM",
+                prev_shares=800000,
+                curr_shares=1000000,
+                prev_value=120000000.0,
+                curr_value=150000000.0,
             ),
             HoldingChange(
-                "594918104",
-                "MICROSOFT CORP",
-                "decreased",
-                600000,
-                500000,
-                120000000.0,
-                100000000.0,
-            ),
-            HoldingChange("88160R101", "TESLA INC", "new", 0, 100000, 0.0, 30000000.0),
-            HoldingChange(
-                "023135106", "AMAZON.COM INC", "closed", 200000, 0, 50000000.0, 0.0
+                cusip="594918104",
+                issuer_name="MICROSOFT CORP",
+                change_type="decreased",
+                security_class="COM",
+                prev_shares=600000,
+                curr_shares=500000,
+                prev_value=120000000.0,
+                curr_value=100000000.0,
             ),
             HoldingChange(
-                "30303M102", "META PLATFORMS INC", "new", 0, 80000, 0.0, 20000000.0
+                cusip="88160R101",
+                issuer_name="TESLA INC",
+                change_type="new",
+                security_class="COM",
+                prev_shares=0,
+                curr_shares=100000,
+                prev_value=0.0,
+                curr_value=30000000.0,
+            ),
+            HoldingChange(
+                cusip="023135106",
+                issuer_name="AMAZON.COM INC",
+                change_type="closed",
+                security_class="COM",
+                prev_shares=200000,
+                curr_shares=0,
+                prev_value=50000000.0,
+                curr_value=0.0,
+            ),
+            HoldingChange(
+                cusip="30303M102",
+                issuer_name="META PLATFORMS INC",
+                change_type="new",
+                security_class="COM",
+                prev_shares=0,
+                curr_shares=80000,
+                prev_value=0.0,
+                curr_value=20000000.0,
             ),
         ]
 
@@ -97,3 +123,28 @@ class TestHoldingsVisualizer:
         )
 
         visualizer.plot_holdings_changes(empty_changes)
+
+    def test_plot_holdings_changes_with_all_change_types(
+        self, visualizer, sample_holdings_change, monkeypatch
+    ):
+        """测试包含全部变动类型的图表绘制"""
+        show_called = False
+
+        def fake_show():
+            nonlocal show_called
+            show_called = True
+
+        monkeypatch.setattr(plt, "show", fake_show)
+
+        visualizer.plot_holdings_changes(sample_holdings_change, top_n=12)
+
+        assert show_called is True
+        assert len(plt.gcf().axes) == 4
+        plt.close("all")
+
+    def test_visualizer_seaborn_style_initialization(self):
+        """测试seaborn样式初始化"""
+        visualizer = HoldingsVisualizer(style="seaborn", figsize=(8, 4))
+
+        assert visualizer.figsize == (8, 4)
+        assert len(visualizer.color_palette) == 10

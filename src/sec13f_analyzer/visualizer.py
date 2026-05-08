@@ -38,10 +38,11 @@ class HoldingsVisualizer:
         plt.rcParams["font.sans-serif"] = ["Arial Unicode MS", "SimHei", "DejaVu Sans"]
         plt.rcParams["axes.unicode_minus"] = False
 
-        # 设置颜色主题
         try:
+            import seaborn as sns
+
             self.color_palette = sns.color_palette("husl", 10)
-        except Exception:
+        except ImportError:
             # 如果seaborn不可用，使用matplotlib默认颜色
             try:
                 # 使用新的matplotlib API

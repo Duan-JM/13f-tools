@@ -2,10 +2,10 @@
 
 一个专业的SEC 13F报告分析工具，专注于机构投资者持仓变动追踪和深度分析。通过命令行界面，轻松获取和分析美国机构投资者的持仓数据。
 
-[![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://python.org)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://python.org)
 [![Poetry](https://img.shields.io/badge/Poetry-managed-success)](https://python-poetry.org)
-[![Tests](https://img.shields.io/badge/Tests-84%25%20coverage-green)](https://pytest.org)
-[![License](https://img.shields.io/badge/License-MIT-blue)](LICENSE)
+[![Coverage](https://img.shields.io/badge/Coverage-70%25%2B-green)](https://pytest.org)
+[![License](https://img.shields.io/badge/License-Apache--2.0-blue)](LICENSE)
 
 ## ✨ 核心功能
 
@@ -19,15 +19,15 @@
 
 ### 环境要求
 
-- Python 3.8+
+- Python 3.10+
 - Poetry (推荐) 或 pip
 
 ### 安装步骤
 
 ```bash
 # 1. 克隆项目
-git clone https://github.com/your-repo/ValueAnalyze.git
-cd ValueAnalyze/13f-tools
+git clone https://github.com/Duan-JM/13f-tools.git
+cd 13f-tools
 
 # 2. 使用Poetry安装 (推荐)
 poetry install

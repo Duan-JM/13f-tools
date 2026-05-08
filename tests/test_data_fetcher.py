@@ -155,6 +155,123 @@ class TestSEC13FDataFetcher:
         assert total_value == 150000000.0
         assert period_end_date == datetime(2024, 9, 30)
 
+    def test_parse_xml_holdings_rejects_unsafe_entities(self, fetcher):
+        """测试不安全XML实体不会被展开"""
+        xml_content = """<?xml version="1.0"?>
+        <!DOCTYPE informationTable [
+          <!ENTITY unsafe "expanded">
+        ]>
+        <informationTable>
+            <infoTable>
+                <cusip>&unsafe;</cusip>
+                <nameOfIssuer>APPLE INC</nameOfIssuer>
+                <titleOfClass>COM</titleOfClass>
+                <sshPrnamt>1000000</sshPrnamt>
+                <value>150000</value>
+            </infoTable>
+        </informationTable>"""
+
+        holdings, total_value, period_end_date = fetcher._parse_xml_holdings(
+            xml_content
+        )
+
+        assert holdings == []
+        assert total_value == 0.0
+        assert period_end_date is None
+
+    def test_parse_xml_holdings_from_html_script(self, fetcher):
+        """测试从HTML script标签中提取XML持仓数据"""
+        html_content = """<html><body>
+        <script type="text/xml">
+        <informationTable>
+            <reportCalendarOrQuarter>09-30-2024</reportCalendarOrQuarter>
+            <infoTable>
+                <cusip>037833100</cusip>
+                <nameOfIssuer>APPLE INC</nameOfIssuer>
+                <titleOfClass>COM</titleOfClass>
+                <sshPrnamt>1000000</sshPrnamt>
+                <value>150000</value>
+            </infoTable>
+        </informationTable>
+        </script>
+        </body></html>"""
+
+        holdings, total_value, period_end_date = fetcher._parse_xml_holdings(
+            html_content
+        )
+
+        assert len(holdings) == 1
+        assert holdings[0].issuer_name == "APPLE INC"
+        assert total_value == 150000000.0
+        assert period_end_date == datetime(2024, 9, 30)
+
+    def test_parse_xml_holdings_from_html_pre(self, fetcher):
+        """测试从HTML pre标签中提取XML持仓数据"""
+        html_content = """<html><body>
+        <pre>
+        &lt;informationTable&gt;
+            &lt;infoTable&gt;
+                &lt;cusip&gt;594918104&lt;/cusip&gt;
+                &lt;nameOfIssuer&gt;MICROSOFT CORP&lt;/nameOfIssuer&gt;
+                &lt;titleOfClass&gt;COM&lt;/titleOfClass&gt;
+                &lt;sshPrnamt&gt;500&lt;/sshPrnamt&gt;
+                &lt;value&gt;120&lt;/value&gt;
+            &lt;/infoTable&gt;
+        &lt;/informationTable&gt;
+        </pre>
+        </body></html>"""
+
+        holdings, total_value, period_end_date = fetcher._parse_xml_holdings(
+            html_content
+        )
+
+        assert len(holdings) == 1
+        assert holdings[0].cusip == "594918104"
+        assert total_value == 120000.0
+        assert period_end_date is None
+
+    def test_parse_html_table_holdings(self, fetcher):
+        """测试HTML表格格式的持仓数据解析"""
+        html_content = """
+        <html>
+          <table>
+            <tr>
+              <th>CUSIP</th><th>Name of Issuer</th><th>Shares</th><th>Value</th>
+            </tr>
+            <tr>
+              <td>037833100</td><td>APPLE INC</td><td>1,000</td><td>$150</td>
+            </tr>
+          </table>
+        </html>
+        """
+
+        holdings, total_value, period_end_date = fetcher._parse_html_table(html_content)
+
+        assert len(holdings) == 1
+        assert holdings[0].cusip == "037833100"
+        assert holdings[0].shares_owned == 1000
+        assert holdings[0].market_value == 150000.0
+        assert total_value == 150000.0
+        assert period_end_date is None
+
+    def test_parse_txt_holdings(self, fetcher):
+        """测试文本格式的持仓数据解析"""
+        txt_content = """
+        Report period ended 09/30/2024
+        CUSIP       Name of Issuer       Shares       Value
+        037833100   APPLE INC            1000         150
+        594918104   MICROSOFT CORP       500          120
+        """
+
+        holdings, total_value, period_end_date = fetcher._parse_txt_holdings(
+            txt_content
+        )
+
+        assert len(holdings) == 2
+        assert holdings[0].issuer_name == "APPLE INC"
+        assert total_value == 270000.0
+        assert period_end_date == datetime(2024, 9, 30)
+
     def test_request_rate_limiting(self, fetcher):
         """测试请求频率限制"""
         import time

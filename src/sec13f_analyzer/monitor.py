@@ -204,7 +204,9 @@ class SEC13FMonitor:
             if last_check:
                 days_since_last = (datetime.now() - last_check).days
                 if days_since_last < portfolio.min_report_days:
-                    logger.debug(f"{portfolio.name} 距上次检查仅 {days_since_last} 天，跳过")
+                    logger.debug(
+                        f"{portfolio.name} 距上次检查仅 {days_since_last} 天，跳过"
+                    )
                     return False
 
             logger.info(

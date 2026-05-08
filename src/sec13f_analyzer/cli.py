@@ -147,7 +147,9 @@ def analyze(ctx, cik, from_quarter, to_quarter, output, output_format, show_plot
     try:
         analyzer = SEC13FAnalyzer(user_agent)
 
-        click.echo(f"正在分析 CIK {cik} 从 {from_quarter} 到 {to_quarter} 的持仓变动...")
+        click.echo(
+            f"正在分析 CIK {cik} 从 {from_quarter} 到 {to_quarter} 的持仓变动..."
+        )
         holdings_change = analyzer.analyze_holdings_changes(
             cik, from_quarter, to_quarter
         )

@@ -6,13 +6,14 @@ SEC 13F数据获取模块
 
 import re
 import time
-import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urljoin
 
 import requests
 from bs4 import BeautifulSoup
+from defusedxml import ElementTree as ET
+from defusedxml.common import DefusedXmlException
 from loguru import logger
 
 from .config import get_config
@@ -144,7 +145,9 @@ class SEC13FDataFetcher:
                 logger.error(f"HTTP错误: {e}")
                 if hasattr(e, "response") and e.response.status_code == 403:
                     logger.error("SEC拒绝访问的可能原因:")
-                    logger.error("1) User-Agent不符合SEC要求（必须包含公司名和联系方式）")
+                    logger.error(
+                        "1) User-Agent不符合SEC要求（必须包含公司名和联系方式）"
+                    )
                     logger.error("2) 访问频率过高（SEC限制每秒不超过10个请求）")
                     logger.error("3) IP地址被临时限制")
                     logger.error("4) 需要更真实的浏览器headers")
@@ -159,7 +162,9 @@ class SEC13FDataFetcher:
                     raise Exception(f"请求超时，可能网络连接不稳定: {e}")
                 time.sleep(2)  # 超时后等待2秒
             except requests.RequestException as e:
-                logger.error(f"请求失败 {url} (尝试 {attempt + 1}/{self.max_retries}): {e}")
+                logger.error(
+                    f"请求失败 {url} (尝试 {attempt + 1}/{self.max_retries}): {e}"
+                )
                 if attempt == self.max_retries - 1:
                     raise Exception(f"网络请求失败: {e}")
                 time.sleep(1)  # 等待1秒后重试
@@ -584,8 +589,10 @@ class SEC13FDataFetcher:
                         amendment_number=amendment_number,
                     )
 
-                except ET.ParseError as pe:
-                    logger.debug(f"XML解析失败，尝试下一个URL: {primary_doc_url}, 错误: {pe}")
+                except (ET.ParseError, DefusedXmlException) as pe:
+                    logger.debug(
+                        f"XML解析失败，尝试下一个URL: {primary_doc_url}, 错误: {pe}"
+                    )
                     continue
 
             # 所有URL都失败了
@@ -738,7 +745,9 @@ class SEC13FDataFetcher:
         if new_holdings_filings:
             logger.info(f"✓ 发现 {len(new_holdings_filings)} 个NEW HOLDINGS修订")
         if unknown_filings:
-            logger.warning(f"⚠️ 发现 {len(unknown_filings)} 个未知类型修订，将作为RESTATEMENT处理")
+            logger.warning(
+                f"⚠️ 发现 {len(unknown_filings)} 个未知类型修订，将作为RESTATEMENT处理"
+            )
 
         # 警告：同时存在RESTATEMENT和NEW HOLDINGS
         if restatement_filings and new_holdings_filings:
@@ -890,7 +899,9 @@ class SEC13FDataFetcher:
             for href, text, context in document_links:
                 if pattern_func(href, text, context):
                     table_link = urljoin(self.BASE_URL, href)
-                    logger.debug(f"找到13F文件 ({pattern_desc}): {text} -> {table_link}")
+                    logger.debug(
+                        f"找到13F文件 ({pattern_desc}): {text} -> {table_link}"
+                    )
                     break
             if table_link:
                 break
@@ -1073,7 +1084,9 @@ class SEC13FDataFetcher:
                                 else "COM"
                             )
                             shares_owned = int(shares_elem.text)
-                            market_value = float(value_elem.text) * 1000  # SEC以千美元为单位
+                            market_value = (
+                                float(value_elem.text) * 1000
+                            )  # SEC以千美元为单位
 
                             # 投票权信息
                             sole_elem = entry.find(
@@ -1121,6 +1134,9 @@ class SEC13FDataFetcher:
                         logger.warning(f"跳过无效的持仓记录: {e}")
                         continue
 
+        except DefusedXmlException as e:
+            logger.error(f"不安全XML内容: {e}")
+            return [], 0.0, None
         except ET.ParseError as e:
             logger.error(f"XML解析错误: {e}")
             # 如果XML解析失败，尝试HTML表格解析
