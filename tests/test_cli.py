@@ -9,7 +9,7 @@ import pytest
 from click.testing import CliRunner
 
 from sec13f_analyzer.cli import cli
-from sec13f_analyzer.models import Holding, HoldingChange, Holdings, HoldingsChange
+from sec13f_analyzer.models import Holding, Holdings
 
 
 class TestCLI:

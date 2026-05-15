@@ -63,7 +63,9 @@ class Holdings:
     is_amendment: bool = False  # 是否为修订版本
     amendment_info: Optional[AmendmentInfo] = None  # 修订信息
     is_merged: bool = False  # 是否为合并数据
-    amendment_metadata: List[AmendmentInfo] = field(default_factory=list)  # 所有相关修订的元数据
+    amendment_metadata: List[AmendmentInfo] = field(
+        default_factory=list
+    )  # 所有相关修订的元数据
 
     def __post_init__(self):
         """后处理，计算统计信息"""

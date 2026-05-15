@@ -1,14 +1,16 @@
 [build-system]
-requires = ["poetry-core>=1.0.4"]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
 
-[tool.poetry]
+[project]
 name = "sec13f-analyzer"
 version = "0.1.1"
 description = "SEC 13F持仓分析工具，用于追踪机构投资者持仓变动"
-authors = ["Vincent Duan <vincent.duan95@outlook.com>"]
-maintainers = ["Vincent Duan <vincent.duan95@outlook.com>"]
-repository = "https://github.com/Duan-JM/ValueAnalyze.git"
+authors = [{ name = "Vincent Duan", email = "vincent.duan95@outlook.com" }]
+maintainers = [{ name = "Vincent Duan", email = "vincent.duan95@outlook.com" }]
+requires-python = ">=3.10,<4.0"
+readme = "README.md"
+license = "Apache-2.0"
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -18,39 +20,47 @@ classifiers = [
     "Topic :: Office/Business :: Financial :: Investment",
 ]
 keywords = ["SEC", "13F", "holdings", "analysis", "finance"]
-include = ["LICENSE", "README.md"]
-readme = "README.md"
-license = "Apache-2.0"
+dependencies = [
+    "pandas>=2.2.3,<3.0.0",
+    "requests>=2.33.0,<3.0.0",
+    "beautifulsoup4>=4.12.2,<5.0.0",
+    "lxml>=6.1.0,<7.0.0",
+    "defusedxml>=0.7.1,<0.8.0",
+    "loguru>=0.7.3,<0.8.0",
+    "click>=8.1.7,<9.0.0",
+    "numpy>=2.2.0,<3.0.0",
+    "python-dotenv>=1.2.2,<2.0.0",
+    "matplotlib>=3.8.0,<4.0.0",
+    "seaborn>=0.13.0,<0.14.0",
+    "plotly>=5.17.0,<6.0.0",
+    "openpyxl>=3.1.2,<4.0.0",
+    "tqdm>=4.66.4,<5.0.0",
+    "python-dateutil>=2.8.2,<3.0.0",
+    "pyyaml>=6.0.1,<7.0.0",
+    "urllib3>=2.6.3,<3.0.0",
+    "pillow>=12.2.0,<13.0.0",
+    "fonttools>=4.60.2,<5.0.0",
+]
 
-[tool.poetry.scripts]
+[project.urls]
+Repository = "https://github.com/Duan-JM/13f-tools"
+
+[project.scripts]
 sec13f-cli = "sec13f_analyzer.cli:cli"
 
-[tool.poetry.dependencies]
-python = "^3.10"
-pandas = "^2.2.3"
-requests = "^2.31.0"
-beautifulsoup4 = "^4.12.2"
-lxml = "^4.9.3"
-loguru = "^0.7.3"
-click = "^8.1.7"
-numpy = "^2.2.0"
-python-dotenv = "^1.0.1"
-matplotlib = "^3.8.0"
-seaborn = "^0.13.0"
-plotly = "^5.17.0"
-openpyxl = "^3.1.2"
-tqdm = "^4.66.4"
-python-dateutil = "^2.8.2"
-ipdb = "^0.13.13"
-
 [tool.poetry.group.dev.dependencies]
-pytest = "^7.4.3"
+pytest = ">=9.0.3,<10.0.0"
 pytest-cov = "^4.1.0"
 pytest-asyncio = "^0.21.1"
-black = "^23.10.1"
+black = ">=26.3.1,<27.0.0"
 flake8 = "^6.1.0"
 mypy = "^1.7.0"
 isort = "^5.12.0"
+ipdb = "^0.13.13"
+bandit = "^1.8.0"
+pip-audit = "^2.7.3"
+pre-commit = "^3.5.0"
+pygments = ">=2.20.0,<3.0.0"
 
 [tool.poetry.group.test.dependencies]
 pytest-mock = "^3.12.0"

@@ -1,0 +1,55 @@
+# 13F 监控服务配置文件
+
+# 服务基本配置
+service:
+  # 检查间隔（分钟）
+  check_interval: 60
+  # 用户代理
+  user_agent: "SEC13F-Monitor/1.0.0"
+  # 持久化文件路径（保存上次检查的状态）
+  state_file: ".monitor_state.json"
+
+# 要监控的投资组合列表
+portfolios:
+  - name: "伯克希尔哈撒韦"
+    cik: "0001067983"
+    # 是否启用监控
+    enabled: true
+    # 最小报告天数间隔（避免重复通知同一个季度）
+    min_report_days: 30
+
+  - name: "桥水基金"
+    cik: "0001350694"
+    enabled: true
+    min_report_days: 30
+
+  - name: "先锋集团"
+    cik: "0000102909"
+    enabled: false
+    min_report_days: 30
+
+# Webhook 配置
+webhooks:
+  # 飞书 webhook
+  - name: "飞书通知"
+    type: "feishu"
+    # 飞书机器人 webhook URL
+    url: "https://open.feishu.cn/open-apis/bot/v2/hook/YOUR_WEBHOOK_TOKEN"
+    enabled: true
+    # 是否在启动时发送测试消息
+    send_test_on_start: false
+
+  # 可以配置多个 webhook
+  # - name: "备用通知"
+  #   type: "feishu"
+  #   url: "https://open.feishu.cn/open-apis/bot/v2/hook/ANOTHER_WEBHOOK_TOKEN"
+  #   enabled: true
+
+# 通知配置
+notification:
+  # 是否在消息中包含持仓变动详情
+  include_holdings_summary: true
+  # 持仓变动摘要中的最大股票数量
+  max_holdings_in_summary: 10
+  # 是否附加报告链接
+  include_report_link: true

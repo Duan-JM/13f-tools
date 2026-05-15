@@ -17,10 +17,10 @@ class SEC13FAnalyzer:
 
     def __init__(
         self,
-        user_agent: str = None,
-        company_name: str = None,
-        email: str = None,
-        config_file: str = None,
+        user_agent: Optional[str] = None,
+        company_name: Optional[str] = None,
+        email: Optional[str] = None,
+        config_file: Optional[str] = None,
     ):
         """
         初始化分析器
@@ -74,6 +74,8 @@ class SEC13FAnalyzer:
             return self._holdings_cache[cache_key]
 
         holdings = self.data_fetcher.get_holdings_data(cik, quarter)
+        if holdings is None:
+            return None
 
         if self._if_contain_duplicated_cusip(holdings):
             # 以求和逻辑处理 holdings.holdings 中的 Holding
@@ -117,7 +119,9 @@ class SEC13FAnalyzer:
         curr_holdings = self.get_holdings(cik, to_quarter)
 
         if not prev_holdings or not curr_holdings:
-            logger.error(f"无法获取 CIK {cik} 在 {from_quarter} 或 {to_quarter} 的持仓数据")
+            logger.error(
+                f"无法获取 CIK {cik} 在 {from_quarter} 或 {to_quarter} 的持仓数据"
+            )
             return None
 
         # 创建CUSIP到持仓的映射

@@ -21,6 +21,7 @@ class Config:
             config_file: 配置文件路径，如果不提供会自动查找
         """
         self.config = configparser.ConfigParser()
+        self.config_file: Optional[str]
 
         # 查找配置文件
         if config_file and os.path.exists(config_file):

@@ -1,0 +1,26 @@
+repos:
+  - repo: local
+    hooks:
+      - id: black
+        name: black
+        entry: poetry run black --check src/ tests/
+        language: system
+        pass_filenames: false
+
+      - id: isort
+        name: isort
+        entry: poetry run isort --check-only src/ tests/
+        language: system
+        pass_filenames: false
+
+      - id: flake8
+        name: flake8
+        entry: poetry run flake8 src/ tests/
+        language: system
+        pass_filenames: false
+
+      - id: mypy
+        name: mypy
+        entry: poetry run mypy src/
+        language: system
+        pass_filenames: false

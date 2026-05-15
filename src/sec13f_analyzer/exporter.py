@@ -7,7 +7,7 @@
 import json
 import os
 from datetime import datetime
-from typing import Dict, List, Optional, Union
+from typing import Optional, Union
 
 import pandas as pd
 from loguru import logger
@@ -275,7 +275,9 @@ class DataExporter:
             raise ValueError("不支持的数据类型")
 
         filepath = os.path.join(self.output_dir, filename)
-        df.to_csv(filepath, index=False, encoding="utf-8-sig")  # 使用utf-8-sig以支持中文
+        df.to_csv(
+            filepath, index=False, encoding="utf-8-sig"
+        )  # 使用utf-8-sig以支持中文
 
         logger.info(f"数据已导出到CSV: {filepath}")
         return filepath
