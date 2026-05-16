@@ -1,0 +1,53 @@
+# docker-compose.yml
+#
+# Runs the long-running `sec13f-cli monitor` service.
+#
+# Quick start:
+#   1. cp monitor_config.example.yml monitor_config.yml
+#      (edit it to set your portfolios + Feishu webhook URL)
+#   2. docker compose up -d --build
+#   3. docker compose logs -f sec13f-monitor
+#
+# Persistent monitor state and any generated output land in named volumes
+# so the container can be recreated without losing "last seen" filings.
+
+services:
+  sec13f-monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: sec13f-analyzer:latest
+    container_name: sec13f-monitor
+    restart: unless-stopped
+    environment:
+      # Override SEC EDGAR User-Agent if you don't want the default one
+      # baked into monitor_config.yml. SEC requires a real contact.
+      TZ: ${TZ:-UTC}
+    volumes:
+      # Mount your monitor config in read-only mode.
+      - ./monitor_config.yml:/app/config/monitor_config.yml:ro
+      # Persist the JSON state file so restarts don't re-notify old filings.
+      - sec13f-state:/app/state
+      # Optional: surface generated reports/exports to the host.
+      - ./output:/app/output
+    command:
+      - monitor
+      - --config
+      - /app/config/monitor_config.yml
+    healthcheck:
+      # The CLI exits 0 on `--help`; a non-zero exit means the install
+      # is broken or the image is corrupt.
+      test: ["CMD", "sec13f-cli", "--help"]
+      interval: 1m
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+volumes:
+  sec13f-state:
+    driver: local
