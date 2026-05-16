@@ -1,0 +1,69 @@
+# Version control
+.git
+.gitignore
+.github
+
+# Python build / cache artefacts
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info
+build
+dist
+.eggs
+.Python
+
+# Test / coverage / type-check caches
+.pytest_cache
+.mypy_cache
+.coverage
+.coverage.*
+htmlcov
+coverage.xml
+.tox
+.nox
+.hypothesis
+
+# Virtualenvs
+.venv
+venv
+env
+ENV
+
+# Local secrets / configuration that must never leak into the image
+.env
+.env.*
+config.ini
+monitor_config.yml
+.monitor_state.json
+
+# Local outputs
+output
+examples_output
+*.xlsx
+*.csv
+*.log
+
+# Editor / OS noise
+.vscode
+.idea
+.DS_Store
+*.swp
+*.swo
+
+# Docs / dev metadata not needed at runtime
+docs
+tests
+.agents
+.claude
+.pre-commit-config.yaml
+CHANGELOG.md
+CODE_OF_CONDUCT.md
+CONTRIBUTING.md
+
+# Docker artefacts
+Dockerfile
+docker-compose*.yml
+.dockerignore
