@@ -1,3 +1,6 @@
+# prod ipython_config
+monitor_config.yml
+
 # 编译文件
 __pycache__/
 *.py[cod]
