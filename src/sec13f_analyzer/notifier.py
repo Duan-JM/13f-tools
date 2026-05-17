@@ -104,14 +104,21 @@ class FeishuWebhookNotifier(WebhookNotifier):
         Returns:
             dict: 飞书消息 JSON
         """
-        # 使用富文本格式
+        content = self._parse_markdown_to_feishu(message.content)
+        # 飞书自定义机器人 post 消息要求 content 至少包含一个段落，
+        # 否则会返回 "params error, unknown content value"。
+        if not content:
+            content = [[{"tag": "text", "text": message.content or " "}]]
+
+        title = message.title or " "
+
         return {
             "msg_type": "post",
             "content": {
                 "post": {
                     "zh_cn": {
-                        "title": message.title,
-                        "content": self._parse_markdown_to_feishu(message.content),
+                        "title": title,
+                        "content": content,
                     }
                 }
             },
@@ -121,59 +128,58 @@ class FeishuWebhookNotifier(WebhookNotifier):
         """
         将简单的 Markdown 文本转换为飞书富文本格式
 
+        飞书自定义机器人 ``post`` 消息的 ``text`` 标签只接受 ``text`` 与
+        ``un_escape`` 字段，不支持 ``style`` 等扩展字段，否则会触发
+        ``params error, unknown content value`` 错误。因此这里仅生成符合
+        官方文档规范的字段，``**bold**`` 标记会被解析为普通文本节点。
+
         Args:
             markdown_text: Markdown 文本
 
         Returns:
             list: 飞书富文本内容
         """
-        content = []
-        lines = markdown_text.strip().split("\n")
+        import re
+
+        link_pattern = re.compile(r"\[([^\]]+)\]\(([^\)]+)\)")
+
+        content: List[List[Dict]] = []
+        lines = (markdown_text or "").strip().split("\n")
 
         for line in lines:
             if not line.strip():
                 continue
 
-            paragraph = []
+            paragraph: List[Dict] = []
 
-            # 简单处理粗体
+            # 解析行内粗体标记 (**text**)，飞书自定义机器人不支持 style 字段，
+            # 因此只保留文本内容，去除 ``**`` 标记。
             parts = line.split("**")
-            for i, part in enumerate(parts):
+            for part in parts:
                 if not part:
                     continue
 
-                if i % 2 == 1:  # 粗体部分
-                    paragraph.append({"tag": "text", "text": part, "style": ["bold"]})
-                else:  # 普通文本
-                    # 处理链接 [text](url)
-                    if "[" in part and "](" in part and ")" in part:
-                        import re
+                # 处理链接 [text](url)
+                last_end = 0
+                for match in link_pattern.finditer(part):
+                    if match.start() > last_end:
+                        paragraph.append(
+                            {
+                                "tag": "text",
+                                "text": part[last_end : match.start()],
+                            }
+                        )
+                    paragraph.append(
+                        {
+                            "tag": "a",
+                            "text": match.group(1),
+                            "href": match.group(2),
+                        }
+                    )
+                    last_end = match.end()
 
-                        link_pattern = r"\[([^\]]+)\]\(([^\)]+)\)"
-                        last_end = 0
-                        for match in re.finditer(link_pattern, part):
-                            # 添加链接前的文本
-                            if match.start() > last_end:
-                                paragraph.append(
-                                    {
-                                        "tag": "text",
-                                        "text": part[last_end : match.start()],
-                                    }
-                                )
-                            # 添加链接
-                            paragraph.append(
-                                {
-                                    "tag": "a",
-                                    "text": match.group(1),
-                                    "href": match.group(2),
-                                }
-                            )
-                            last_end = match.end()
-                        # 添加剩余文本
-                        if last_end < len(part):
-                            paragraph.append({"tag": "text", "text": part[last_end:]})
-                    else:
-                        paragraph.append({"tag": "text", "text": part})
+                if last_end < len(part):
+                    paragraph.append({"tag": "text", "text": part[last_end:]})
 
             if paragraph:
                 content.append(paragraph)
