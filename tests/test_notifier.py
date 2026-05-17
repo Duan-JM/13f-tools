@@ -98,10 +98,14 @@ def test_feishu_markdown_parsing():
     """测试飞书 Markdown 解析"""
     notifier = FeishuWebhookNotifier("https://example.com")
 
-    # 测试粗体
+    # 测试粗体：飞书自定义机器人不支持 style 字段，
+    # 解析结果应为纯 text 节点，且不包含 ``style`` key。
     result = notifier._parse_markdown_to_feishu("普通文本 **粗体文本** 普通文本")
     assert len(result) == 1
     assert len(result[0]) == 3
+    for node in result[0]:
+        assert node["tag"] == "text"
+        assert "style" not in node
 
     # 测试链接
     result = notifier._parse_markdown_to_feishu("查看 [链接](https://example.com)")
@@ -109,3 +113,34 @@ def test_feishu_markdown_parsing():
     # 应包含文本和链接
     has_link = any(item.get("tag") == "a" for item in result[0])
     assert has_link
+
+
+def test_feishu_payload_has_no_unsupported_style_field():
+    """回归测试：飞书 payload 不应包含 ``style`` 字段，
+    否则会触发 ``params error, unknown content value``。"""
+    notifier = FeishuWebhookNotifier("https://example.com")
+    msg = NotificationMessage(
+        title="测试",
+        content="**重点**: 关注这条消息\n查看 [详情](https://example.com)",
+    )
+
+    payload = notifier._build_payload(msg)
+    paragraphs = payload["content"]["post"]["zh_cn"]["content"]
+
+    assert paragraphs, "payload content 不应为空"
+    for paragraph in paragraphs:
+        for node in paragraph:
+            assert "style" not in node, f"节点不应包含 style 字段: {node}"
+            assert node["tag"] in {"text", "a", "at", "img"}
+
+
+def test_feishu_payload_handles_empty_content():
+    """空 content 时应回退到占位文本，避免空 content 数组导致 webhook 报错。"""
+    notifier = FeishuWebhookNotifier("https://example.com")
+    msg = NotificationMessage(title="标题", content="")
+
+    payload = notifier._build_payload(msg)
+    paragraphs = payload["content"]["post"]["zh_cn"]["content"]
+
+    assert paragraphs, "空内容应回退为至少一个段落"
+    assert paragraphs[0][0]["tag"] == "text"
