@@ -108,6 +108,7 @@ def sample_holdings_change(sample_holdings, sample_prev_holdings):
         HoldingChange(
             cusip="037833100",
             issuer_name="Apple Inc.",
+            security_class="COM",
             change_type="decreased",
             prev_shares=1200000,
             curr_shares=1000000,
@@ -117,6 +118,7 @@ def sample_holdings_change(sample_holdings, sample_prev_holdings):
         HoldingChange(
             cusip="594918104",
             issuer_name="Microsoft Corporation",
+            security_class="COM",
             change_type="increased",
             prev_shares=600000,
             curr_shares=800000,
@@ -126,6 +128,7 @@ def sample_holdings_change(sample_holdings, sample_prev_holdings):
         HoldingChange(
             cusip="023135106",
             issuer_name="Amazon.com Inc",
+            security_class="COM",
             change_type="new",
             prev_shares=0,
             curr_shares=500000,
@@ -135,6 +138,7 @@ def sample_holdings_change(sample_holdings, sample_prev_holdings):
         HoldingChange(
             cusip="88160R101",
             issuer_name="Tesla Inc",
+            security_class="COM",
             change_type="closed",
             prev_shares=100000,
             curr_shares=0,

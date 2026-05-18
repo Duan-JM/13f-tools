@@ -204,6 +204,13 @@ class NotificationBuilder:
     """通知消息构建器"""
 
     @staticmethod
+    def _format_security_label(name: str, security_class: Optional[str]) -> str:
+        """将证券类别追加到展示名称中。"""
+        if security_class:
+            return f"{name} ({security_class})"
+        return name
+
+    @staticmethod
     def build_new_filing_notification(
         fund_name: str,
         cik: str,
@@ -279,7 +286,9 @@ class NotificationBuilder:
         if top_holdings:
             content_parts.append("\n**当前主要持仓**:")
             for i, holding in enumerate(top_holdings, 1):
-                name = holding.get("name", "")
+                name = NotificationBuilder._format_security_label(
+                    holding.get("name", ""), holding.get("security_class")
+                )
                 value = holding.get("value", 0)
                 percentage = holding.get("percentage", 0)
                 content_parts.append(f"{i}. {name}: ${value:,.0f} ({percentage:.2f}%)")
@@ -332,7 +341,9 @@ class NotificationBuilder:
         if new_items:
             lines.append("\n**新增持仓**:")
             for i, item in enumerate(new_items, 1):
-                name = item.get("name", "")
+                name = NotificationBuilder._format_security_label(
+                    item.get("name", ""), item.get("security_class")
+                )
                 value = item.get("value", 0)
                 percentage = item.get("percentage", 0)
                 lines.append(f"{i}. {name}: ${value:,.0f} ({percentage:.2f}%)")
@@ -341,7 +352,9 @@ class NotificationBuilder:
         if closed_items:
             lines.append("\n**清仓持仓**:")
             for i, item in enumerate(closed_items, 1):
-                name = item.get("name", "")
+                name = NotificationBuilder._format_security_label(
+                    item.get("name", ""), item.get("security_class")
+                )
                 prev_value = item.get("prev_value", 0)
                 lines.append(f"{i}. {name}: ${prev_value:,.0f}")
 
@@ -349,7 +362,9 @@ class NotificationBuilder:
         if increased_items:
             lines.append("\n**增持持仓**:")
             for i, item in enumerate(increased_items, 1):
-                name = item.get("name", "")
+                name = NotificationBuilder._format_security_label(
+                    item.get("name", ""), item.get("security_class")
+                )
                 value_change = item.get("value_change", 0)
                 percentage_change = item.get("percentage_change", 0)
                 lines.append(
@@ -361,7 +376,9 @@ class NotificationBuilder:
         if decreased_items:
             lines.append("\n**减持持仓**:")
             for i, item in enumerate(decreased_items, 1):
-                name = item.get("name", "")
+                name = NotificationBuilder._format_security_label(
+                    item.get("name", ""), item.get("security_class")
+                )
                 value_change = item.get("value_change", 0)
                 percentage_change = item.get("percentage_change", 0)
                 lines.append(

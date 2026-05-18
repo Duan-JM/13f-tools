@@ -238,6 +238,7 @@ class SEC13FMonitor:
                         top_holdings.append(
                             {
                                 "name": holding.issuer_name,
+                                "security_class": holding.security_class,
                                 "value": holding.market_value,
                                 "percentage": percentage,
                             }
@@ -393,6 +394,7 @@ class SEC13FMonitor:
             "new": [
                 {
                     "name": c.issuer_name,
+                    "security_class": c.security_class,
                     "value": c.curr_value or 0.0,
                     "percentage": _percentage(c.curr_value),
                 }
@@ -401,6 +403,7 @@ class SEC13FMonitor:
             "closed": [
                 {
                     "name": c.issuer_name,
+                    "security_class": c.security_class,
                     "prev_value": c.prev_value or 0.0,
                 }
                 for c in closed_items
@@ -408,6 +411,7 @@ class SEC13FMonitor:
             "increased": [
                 {
                     "name": c.issuer_name,
+                    "security_class": c.security_class,
                     "prev_value": c.prev_value or 0.0,
                     "curr_value": c.curr_value or 0.0,
                     "value_change": c.value_change or 0.0,
@@ -418,6 +422,7 @@ class SEC13FMonitor:
             "decreased": [
                 {
                     "name": c.issuer_name,
+                    "security_class": c.security_class,
                     "prev_value": c.prev_value or 0.0,
                     "curr_value": c.curr_value or 0.0,
                     "value_change": c.value_change or 0.0,
