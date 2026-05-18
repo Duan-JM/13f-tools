@@ -83,6 +83,109 @@ def test_build_new_filing_notification():
     assert "$1,000,000,000" in msg.content
 
 
+def test_build_new_filing_notification_with_changes_summary():
+    """新报告通知应包含与上一季度的持仓变动摘要"""
+    from datetime import datetime
+
+    changes_summary = {
+        "from_quarter": "2024Q2",
+        "to_quarter": "2024Q3",
+        "total_prev_value": 900_000_000,
+        "total_curr_value": 1_000_000_000,
+        "total_value_change": 100_000_000,
+        "total_percentage_change": 11.11,
+        "counts": {"new": 1, "closed": 1, "increased": 1, "decreased": 1},
+        "new": [
+            {"name": "Amazon.com Inc", "value": 75_000_000, "percentage": 7.5},
+        ],
+        "closed": [
+            {"name": "Tesla Inc", "prev_value": 20_000_000},
+        ],
+        "increased": [
+            {
+                "name": "Microsoft Corporation",
+                "prev_value": 90_000_000,
+                "curr_value": 120_000_000,
+                "value_change": 30_000_000,
+                "percentage_change": 33.33,
+            },
+        ],
+        "decreased": [
+            {
+                "name": "Apple Inc.",
+                "prev_value": 180_000_000,
+                "curr_value": 150_000_000,
+                "value_change": -30_000_000,
+                "percentage_change": -16.67,
+            },
+        ],
+    }
+
+    msg = NotificationBuilder.build_new_filing_notification(
+        fund_name="测试基金",
+        cik="0001234567",
+        quarter="2024Q3",
+        filing_date=datetime(2024, 11, 14),
+        total_value=1_000_000_000,
+        holdings_count=100,
+        changes_summary=changes_summary,
+    )
+
+    assert "持仓变动" in msg.content
+    assert "2024Q2 → 2024Q3" in msg.content
+    assert "新增 1" in msg.content
+    assert "清仓 1" in msg.content
+    assert "增持 1" in msg.content
+    assert "减持 1" in msg.content
+
+    # 各类别条目
+    assert "Amazon.com Inc" in msg.content
+    assert "Tesla Inc" in msg.content
+    assert "Microsoft Corporation" in msg.content
+    assert "Apple Inc." in msg.content
+
+    # 总体变化的方向标识
+    assert "+$100,000,000" in msg.content
+    assert "+11.11%" in msg.content
+    # 减持金额以 - 前缀展示
+    assert "-$30,000,000" in msg.content
+
+
+def test_build_new_filing_notification_skips_empty_change_categories():
+    """空的变动类别不应输出对应小节"""
+    from datetime import datetime
+
+    changes_summary = {
+        "from_quarter": "2024Q2",
+        "to_quarter": "2024Q3",
+        "total_prev_value": 1_000_000_000,
+        "total_curr_value": 1_000_000_000,
+        "total_value_change": 0,
+        "total_percentage_change": 0.0,
+        "counts": {"new": 0, "closed": 0, "increased": 0, "decreased": 0},
+        "new": [],
+        "closed": [],
+        "increased": [],
+        "decreased": [],
+    }
+
+    msg = NotificationBuilder.build_new_filing_notification(
+        fund_name="测试基金",
+        cik="0001234567",
+        quarter="2024Q3",
+        filing_date=datetime(2024, 11, 14),
+        total_value=1_000_000_000,
+        holdings_count=100,
+        changes_summary=changes_summary,
+    )
+
+    assert "持仓变动" in msg.content
+    assert "**新增持仓**" not in msg.content
+    assert "**清仓持仓**" not in msg.content
+    assert "**增持持仓**" not in msg.content
+    assert "**减持持仓**" not in msg.content
+
+
 def test_build_service_start_notification():
     """测试构建服务启动通知"""
     msg = NotificationBuilder.build_service_start_notification(

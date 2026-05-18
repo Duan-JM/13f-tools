@@ -135,9 +135,10 @@ def test_monitor_check_new_report(
     mock_analyzer = MagicMock()
     mock_analyzer_class.return_value = mock_analyzer
 
-    # Mock 报告数据
+    # Mock 报告数据：包含上一季度，便于覆盖变动摘要分支
     mock_analyzer.data_fetcher.get_13f_filings.return_value = [
-        {"quarter": "2024Q3", "filing_date": datetime(2024, 11, 14)}
+        {"quarter": "2024Q3", "filing_date": datetime(2024, 11, 14)},
+        {"quarter": "2024Q2", "filing_date": datetime(2024, 8, 14)},
     ]
 
     # Mock 持仓数据
@@ -146,6 +147,8 @@ def test_monitor_check_new_report(
     mock_holdings.holdings = [MagicMock() for _ in range(100)]
     mock_analyzer.get_holdings.return_value = mock_holdings
     mock_analyzer.get_top_holdings.return_value = []
+    # 没有可用的变动数据时返回 None，不应触发异常
+    mock_analyzer.analyze_holdings_changes.return_value = None
 
     # Mock notifier
     mock_notifier = MagicMock()
@@ -160,6 +163,10 @@ def test_monitor_check_new_report(
     assert result is True
     # 验证通知被发送
     assert mock_notifier.send.called
+    # 应基于上一季度尝试计算变动
+    mock_analyzer.analyze_holdings_changes.assert_called_once_with(
+        "0001234567", "2024Q2", "2024Q3"
+    )
 
 
 @patch("sec13f_analyzer.monitor.SEC13FAnalyzer")
@@ -191,3 +198,102 @@ def test_monitor_no_new_report(
     result = monitor._check_portfolio(sample_monitor_config.portfolios[0])
 
     assert result is False
+
+
+def test_find_previous_quarter_skips_same_quarter():
+    """同季度的修订报告应被跳过"""
+    filings = [
+        {"quarter": "2024Q3", "filing_date": datetime(2024, 12, 1)},
+        {"quarter": "2024Q3", "filing_date": datetime(2024, 11, 14)},
+        {"quarter": "2024Q2", "filing_date": datetime(2024, 8, 14)},
+        {"quarter": "2024Q1", "filing_date": datetime(2024, 5, 14)},
+    ]
+    assert SEC13FMonitor._find_previous_quarter(filings, "2024Q3") == "2024Q2"
+
+
+def test_find_previous_quarter_returns_none_when_only_latest():
+    """只有最新季度的记录时应返回 None"""
+    filings = [
+        {"quarter": "2024Q3", "filing_date": datetime(2024, 11, 14)},
+    ]
+    assert SEC13FMonitor._find_previous_quarter(filings, "2024Q3") is None
+
+
+@patch("sec13f_analyzer.monitor.SEC13FAnalyzer")
+@patch("sec13f_analyzer.monitor.FeishuWebhookNotifier")
+def test_monitor_includes_changes_summary_in_notification(
+    mock_notifier_class,
+    mock_analyzer_class,
+    sample_monitor_config,
+    temp_state_file,
+    sample_holdings,
+    sample_holdings_change,
+):
+    """变动摘要应作为参数传入通知构建器，并最终出现在通知内容中"""
+    sample_monitor_config.service.state_file = temp_state_file
+
+    mock_analyzer = MagicMock()
+    mock_analyzer_class.return_value = mock_analyzer
+
+    mock_analyzer.data_fetcher.get_13f_filings.return_value = [
+        {"quarter": "2024Q3", "filing_date": datetime(2024, 11, 14)},
+        {"quarter": "2024Q2", "filing_date": datetime(2024, 8, 14)},
+    ]
+    mock_analyzer.get_holdings.return_value = sample_holdings
+    mock_analyzer.get_top_holdings.return_value = sample_holdings.top_holdings(5)
+    mock_analyzer.analyze_holdings_changes.return_value = sample_holdings_change
+
+    mock_notifier = MagicMock()
+    mock_notifier_class.return_value = mock_notifier
+
+    monitor = SEC13FMonitor(sample_monitor_config)
+    monitor.notifiers = [mock_notifier]
+
+    result = monitor._check_portfolio(sample_monitor_config.portfolios[0])
+
+    assert result is True
+    mock_analyzer.analyze_holdings_changes.assert_called_once_with(
+        "0001234567", "2024Q2", "2024Q3"
+    )
+
+    # 通知内容应同时包含当前持仓和变动摘要
+    sent_message = mock_notifier.send.call_args.args[0]
+    assert "当前主要持仓" in sent_message.content
+    assert "持仓变动" in sent_message.content
+    assert "Amazon.com Inc" in sent_message.content  # new
+    assert "Tesla Inc" in sent_message.content  # closed
+    assert "Microsoft Corporation" in sent_message.content  # increased
+    assert "Apple Inc." in sent_message.content  # decreased
+
+
+@patch("sec13f_analyzer.monitor.SEC13FAnalyzer")
+@patch("sec13f_analyzer.monitor.FeishuWebhookNotifier")
+def test_monitor_skips_changes_summary_when_disabled(
+    mock_notifier_class,
+    mock_analyzer_class,
+    sample_monitor_config,
+    temp_state_file,
+    sample_holdings,
+):
+    """当配置关闭变动摘要时不应调用 analyze_holdings_changes"""
+    sample_monitor_config.service.state_file = temp_state_file
+    sample_monitor_config.notification.include_changes_summary = False
+
+    mock_analyzer = MagicMock()
+    mock_analyzer_class.return_value = mock_analyzer
+    mock_analyzer.data_fetcher.get_13f_filings.return_value = [
+        {"quarter": "2024Q3", "filing_date": datetime(2024, 11, 14)},
+        {"quarter": "2024Q2", "filing_date": datetime(2024, 8, 14)},
+    ]
+    mock_analyzer.get_holdings.return_value = sample_holdings
+    mock_analyzer.get_top_holdings.return_value = []
+
+    mock_notifier = MagicMock()
+    mock_notifier_class.return_value = mock_notifier
+
+    monitor = SEC13FMonitor(sample_monitor_config)
+    monitor.notifiers = [mock_notifier]
+
+    monitor._check_portfolio(sample_monitor_config.portfolios[0])
+
+    mock_analyzer.analyze_holdings_changes.assert_not_called()

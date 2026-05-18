@@ -9,11 +9,12 @@ import signal
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
 from .analyzer import SEC13FAnalyzer
+from .models import HoldingsChange
 from .monitor_config import MonitorConfig, PortfolioConfig
 from .notifier import (
     FeishuWebhookNotifier,
@@ -179,8 +180,9 @@ class SEC13FMonitor:
         try:
             logger.info(f"检查 {portfolio.name} (CIK: {portfolio.cik}) 的 13F 报告...")
 
-            # 获取最近的 13F 报告列表
-            filings = self.analyzer.data_fetcher.get_13f_filings(portfolio.cik, years=1)
+            # 获取最近的 13F 报告列表，覆盖至少两年的窗口，
+            # 以便定位最新报告对应的上一季度报告。
+            filings = self.analyzer.data_fetcher.get_13f_filings(portfolio.cik, years=2)
 
             if not filings:
                 logger.info(f"未找到 {portfolio.name} 的 13F 报告")
@@ -210,7 +212,8 @@ class SEC13FMonitor:
                     return False
 
             logger.info(
-                f"发现 {portfolio.name} 的新报告: {latest_quarter} (申报日期: {filing_date.strftime('%Y-%m-%d')})"
+                f"发现 {portfolio.name} 的新报告: {latest_quarter} "
+                f"(申报日期: {filing_date.strftime('%Y-%m-%d')})"
             )
 
             # 获取持仓详情
@@ -240,10 +243,29 @@ class SEC13FMonitor:
                             }
                         )
 
+            # 计算与上一季度的持仓变动
+            changes_summary: Optional[Dict[str, Any]] = None
+            if self.config.notification.include_changes_summary:
+                prev_quarter = self._find_previous_quarter(filings, latest_quarter)
+                if prev_quarter:
+                    changes_summary = self._build_changes_summary(
+                        portfolio.cik,
+                        prev_quarter,
+                        latest_quarter,
+                        holdings.total_value,
+                    )
+                else:
+                    logger.info(
+                        f"{portfolio.name} 未找到上一季度报告，跳过持仓变动摘要"
+                    )
+
             # 报告链接
             report_url = None
             if self.config.notification.include_report_link:
-                report_url = f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={portfolio.cik}&type=13F&dateb=&owner=exclude&count=10"
+                report_url = (
+                    "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany"
+                    f"&CIK={portfolio.cik}&type=13F&dateb=&owner=exclude&count=10"
+                )
 
             message = NotificationBuilder.build_new_filing_notification(
                 fund_name=portfolio.name,
@@ -254,6 +276,7 @@ class SEC13FMonitor:
                 holdings_count=len(holdings.holdings),
                 top_holdings=top_holdings,
                 report_url=report_url,
+                changes_summary=changes_summary,
             )
 
             # 发送通知
@@ -267,6 +290,142 @@ class SEC13FMonitor:
         except Exception as e:
             logger.error(f"检查 {portfolio.name} 时出错: {e}")
             return False
+
+    @staticmethod
+    def _find_previous_quarter(
+        filings: List[Dict[str, Any]], latest_quarter: str
+    ) -> Optional[str]:
+        """
+        从报告列表中定位最新季度之前的一个季度。
+
+        ``filings`` 按申报日期降序排列，可能因为修订（13F-HR/A）而出现
+        重复季度，因此需要找到与 ``latest_quarter`` 不同且较早的季度。
+
+        Args:
+            filings: ``get_13f_filings`` 返回的报告列表
+            latest_quarter: 最新报告所属季度
+
+        Returns:
+            上一个季度字符串，找不到时返回 ``None``。
+        """
+        for filing in filings:
+            quarter = filing.get("quarter")
+            if quarter and quarter != latest_quarter:
+                return str(quarter)
+        return None
+
+    def _build_changes_summary(
+        self,
+        cik: str,
+        prev_quarter: str,
+        curr_quarter: str,
+        total_curr_value: float,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        构建用于通知的持仓变动摘要数据。
+
+        Args:
+            cik: 基金 CIK
+            prev_quarter: 上一季度
+            curr_quarter: 最新季度
+            total_curr_value: 当前总持仓市值，用于计算占比
+
+        Returns:
+            摘要字典，无法计算时返回 ``None``。
+        """
+        try:
+            changes = self.analyzer.analyze_holdings_changes(
+                cik, prev_quarter, curr_quarter
+            )
+        except Exception as e:  # pragma: no cover - 防御性日志
+            logger.warning(f"计算 {cik} 持仓变动失败: {e}")
+            return None
+
+        if changes is None:
+            return None
+
+        return self._serialize_changes_summary(changes, total_curr_value)
+
+    def _serialize_changes_summary(
+        self, changes: HoldingsChange, total_curr_value: float
+    ) -> Dict[str, Any]:
+        """将 ``HoldingsChange`` 转换为通知所需的紧凑字典。"""
+        max_items = max(0, self.config.notification.max_changes_in_summary)
+
+        new_items = sorted(
+            changes.new_positions,
+            key=lambda c: c.curr_value or 0.0,
+            reverse=True,
+        )[:max_items]
+        closed_items = sorted(
+            changes.closed_positions,
+            key=lambda c: c.prev_value or 0.0,
+            reverse=True,
+        )[:max_items]
+        increased_items = sorted(
+            changes.increased_positions,
+            key=lambda c: c.value_change or 0.0,
+            reverse=True,
+        )[:max_items]
+        decreased_items = sorted(
+            changes.decreased_positions,
+            key=lambda c: c.value_change or 0.0,
+        )[:max_items]
+
+        def _percentage(value: Optional[float]) -> float:
+            if not value or total_curr_value <= 0:
+                return 0.0
+            return (value / total_curr_value) * 100
+
+        return {
+            "from_quarter": changes.from_quarter,
+            "to_quarter": changes.to_quarter,
+            "total_prev_value": changes.total_prev_value,
+            "total_curr_value": changes.total_curr_value,
+            "total_value_change": changes.total_value_change,
+            "total_percentage_change": changes.total_percentage_change,
+            "counts": {
+                "new": len(changes.new_positions),
+                "closed": len(changes.closed_positions),
+                "increased": len(changes.increased_positions),
+                "decreased": len(changes.decreased_positions),
+            },
+            "new": [
+                {
+                    "name": c.issuer_name,
+                    "value": c.curr_value or 0.0,
+                    "percentage": _percentage(c.curr_value),
+                }
+                for c in new_items
+            ],
+            "closed": [
+                {
+                    "name": c.issuer_name,
+                    "prev_value": c.prev_value or 0.0,
+                }
+                for c in closed_items
+            ],
+            "increased": [
+                {
+                    "name": c.issuer_name,
+                    "prev_value": c.prev_value or 0.0,
+                    "curr_value": c.curr_value or 0.0,
+                    "value_change": c.value_change or 0.0,
+                    "percentage_change": c.percentage_change or 0.0,
+                }
+                for c in increased_items
+            ],
+            "decreased": [
+                {
+                    "name": c.issuer_name,
+                    "prev_value": c.prev_value or 0.0,
+                    "curr_value": c.curr_value or 0.0,
+                    "value_change": c.value_change or 0.0,
+                    "percentage_change": c.percentage_change or 0.0,
+                }
+                for c in decreased_items
+            ],
+        }
 
     def check_once(self) -> int:
         """
