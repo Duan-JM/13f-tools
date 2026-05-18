@@ -260,10 +260,10 @@ def test_monitor_includes_changes_summary_in_notification(
     sent_message = mock_notifier.send.call_args.args[0]
     assert "当前主要持仓" in sent_message.content
     assert "持仓变动" in sent_message.content
-    assert "Amazon.com Inc" in sent_message.content  # new
-    assert "Tesla Inc" in sent_message.content  # closed
-    assert "Microsoft Corporation" in sent_message.content  # increased
-    assert "Apple Inc." in sent_message.content  # decreased
+    assert "Amazon.com Inc (COM)" in sent_message.content  # new
+    assert "Tesla Inc (COM)" in sent_message.content  # closed
+    assert "Microsoft Corporation (COM)" in sent_message.content  # increased
+    assert "Apple Inc. (COM)" in sent_message.content  # decreased
 
 
 @patch("sec13f_analyzer.monitor.SEC13FAnalyzer")

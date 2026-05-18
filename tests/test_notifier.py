@@ -96,14 +96,20 @@ def test_build_new_filing_notification_with_changes_summary():
         "total_percentage_change": 11.11,
         "counts": {"new": 1, "closed": 1, "increased": 1, "decreased": 1},
         "new": [
-            {"name": "Amazon.com Inc", "value": 75_000_000, "percentage": 7.5},
+            {
+                "name": "Amazon.com Inc",
+                "security_class": "COM",
+                "value": 75_000_000,
+                "percentage": 7.5,
+            },
         ],
         "closed": [
-            {"name": "Tesla Inc", "prev_value": 20_000_000},
+            {"name": "Tesla Inc", "security_class": "COM", "prev_value": 20_000_000},
         ],
         "increased": [
             {
                 "name": "Microsoft Corporation",
+                "security_class": "COM",
                 "prev_value": 90_000_000,
                 "curr_value": 120_000_000,
                 "value_change": 30_000_000,
@@ -113,6 +119,7 @@ def test_build_new_filing_notification_with_changes_summary():
         "decreased": [
             {
                 "name": "Apple Inc.",
+                "security_class": "COM",
                 "prev_value": 180_000_000,
                 "curr_value": 150_000_000,
                 "value_change": -30_000_000,
@@ -139,16 +146,40 @@ def test_build_new_filing_notification_with_changes_summary():
     assert "减持 1" in msg.content
 
     # 各类别条目
-    assert "Amazon.com Inc" in msg.content
-    assert "Tesla Inc" in msg.content
-    assert "Microsoft Corporation" in msg.content
-    assert "Apple Inc." in msg.content
+    assert "Amazon.com Inc (COM)" in msg.content
+    assert "Tesla Inc (COM)" in msg.content
+    assert "Microsoft Corporation (COM)" in msg.content
+    assert "Apple Inc. (COM)" in msg.content
 
     # 总体变化的方向标识
     assert "+$100,000,000" in msg.content
     assert "+11.11%" in msg.content
     # 减持金额以 - 前缀展示
     assert "-$30,000,000" in msg.content
+
+
+def test_build_new_filing_notification_includes_title_of_class_in_top_holdings():
+    """当前主要持仓应展示 TITLE OF CLASS。"""
+    from datetime import datetime
+
+    msg = NotificationBuilder.build_new_filing_notification(
+        fund_name="测试基金",
+        cik="0001234567",
+        quarter="2024Q3",
+        filing_date=datetime(2024, 11, 14),
+        total_value=1_000_000_000,
+        holdings_count=100,
+        top_holdings=[
+            {
+                "name": "Alphabet Inc",
+                "security_class": "CLASS A",
+                "value": 80_000_000,
+                "percentage": 8.0,
+            }
+        ],
+    )
+
+    assert "Alphabet Inc (CLASS A)" in msg.content
 
 
 def test_build_new_filing_notification_skips_empty_change_categories():
