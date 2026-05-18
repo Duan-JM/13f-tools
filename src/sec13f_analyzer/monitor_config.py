@@ -48,6 +48,10 @@ class NotificationConfig:
     include_holdings_summary: bool = True
     max_holdings_in_summary: int = 10
     include_report_link: bool = True
+    # 是否在消息中包含与上一季度的持仓变动摘要
+    include_changes_summary: bool = True
+    # 持仓变动摘要中每个类别（新增/清仓/增持/减持）的最大条目数
+    max_changes_in_summary: int = 5
 
 
 @dataclass
@@ -171,6 +175,8 @@ class MonitorConfigLoader:
             include_holdings_summary=data.get("include_holdings_summary", True),
             max_holdings_in_summary=data.get("max_holdings_in_summary", 10),
             include_report_link=data.get("include_report_link", True),
+            include_changes_summary=data.get("include_changes_summary", True),
+            max_changes_in_summary=data.get("max_changes_in_summary", 5),
         )
 
     @staticmethod
