@@ -286,8 +286,8 @@ def test_filing_notification_falls_back_to_quarter_end_date():
     assert "2024-09-30" in msg.content
 
 
-def test_filing_notification_renders_top_holdings_as_table():
-    """issue #8：主要持仓应使用 Markdown 表格呈现。"""
+def test_filing_notification_renders_top_holdings_as_native_table():
+    """issue #8：主要持仓应使用飞书原生 ``table`` 组件呈现。"""
     from datetime import datetime
 
     msg = NotificationBuilder.build_new_filing_notification(
@@ -307,15 +307,36 @@ def test_filing_notification_renders_top_holdings_as_table():
         ],
     )
 
-    # Markdown 表头与分隔线
-    assert "| # | 证券 | 市值 (USD) | 占比 |" in msg.content
-    assert "| --- | --- | --- | --- |" in msg.content
-    # 表格中的条目
-    assert "| 1 | Alphabet Inc (CLASS A) | $80,000,000 | 8.00% |" in msg.content
+    # 主要持仓应在 elements 中以原生 table 形式存在
+    assert msg.elements is not None
+    tables = [el for el in msg.elements if el.get("tag") == "table"]
+    assert len(tables) == 1
+    top_table = tables[0]
+
+    # 列结构
+    col_names = [c["display_name"] for c in top_table["columns"]]
+    assert col_names == ["#", "证券", "市值 (USD)", "占比"]
+    # 数值列右对齐
+    aligns = {c["name"]: c["horizontal_align"] for c in top_table["columns"]}
+    assert aligns["value"] == "right"
+    assert aligns["percentage"] == "right"
+    # 证券列使用 lark_md 以支持颜色 / 链接
+    data_types = {c["name"]: c["data_type"] for c in top_table["columns"]}
+    assert data_types["security"] == "lark_md"
+
+    # 行数据
+    assert top_table["rows"] == [
+        {
+            "idx": "1",
+            "security": "Alphabet Inc (CLASS A)",
+            "value": "$80,000,000",
+            "percentage": "8.00%",
+        }
+    ]
 
 
-def test_filing_notification_renders_change_categories_as_tables():
-    """issue #8：增持/减持等持仓变动应使用表格呈现，并对市值变化高亮。"""
+def test_filing_notification_renders_change_categories_as_native_tables():
+    """issue #8：增持/减持等持仓变动应使用原生表格呈现，并对市值变化高亮。"""
     from datetime import datetime
 
     changes_summary = {
@@ -369,20 +390,63 @@ def test_filing_notification_renders_change_categories_as_tables():
         changes_summary=changes_summary,
     )
 
-    # 各分类均应渲染为 markdown 表格
-    assert "| # | 证券 | 市值 (USD) | 占比 |" in msg.content
-    assert "| # | 证券 | 前期市值 (USD) |" in msg.content
-    assert "| # | 证券 | 市值变化 (USD) | 占比变化 |" in msg.content
+    assert msg.elements is not None
+    tables = [el for el in msg.elements if el.get("tag") == "table"]
+    # 没有 top_holdings 时，应有 4 个变动分类表格
+    assert len(tables) == 4
 
-    # 总市值正向变化应使用绿色高亮，减持的负向变化应使用红色高亮
-    assert "<font color='green'>+$100,000,000 (+11.11%)</font>" in msg.content
-    assert "<font color='red'>-$30,000,000</font>" in msg.content
-    # 增持的正向变化也应使用绿色高亮
-    assert "<font color='green'>+$30,000,000</font>" in msg.content
+    new_table, closed_table, inc_table, dec_table = tables
+
+    # 新增持仓
+    assert [c["display_name"] for c in new_table["columns"]] == [
+        "#",
+        "证券",
+        "市值 (USD)",
+        "占比",
+    ]
+    assert new_table["rows"][0]["security"] == "Amazon.com Inc (COM)"
+
+    # 清仓持仓
+    assert [c["display_name"] for c in closed_table["columns"]] == [
+        "#",
+        "证券",
+        "前期市值 (USD)",
+    ]
+    assert closed_table["rows"][0]["prev_value"] == "$20,000,000"
+
+    # 增持持仓：市值变化列用 lark_md，颜色为绿色
+    assert [c["display_name"] for c in inc_table["columns"]] == [
+        "#",
+        "证券",
+        "市值变化 (USD)",
+        "占比变化",
+    ]
+    inc_value_change_col = next(
+        c for c in inc_table["columns"] if c["name"] == "value_change"
+    )
+    assert inc_value_change_col["data_type"] == "lark_md"
+    assert "<font color='green'>+$30,000,000</font>" in (
+        inc_table["rows"][0]["value_change"]
+    )
+    assert inc_table["rows"][0]["percentage_change"] == "+33.33%"
+
+    # 减持持仓：市值变化列颜色为红色
+    assert "<font color='red'>-$30,000,000</font>" in (
+        dec_table["rows"][0]["value_change"]
+    )
+
+    # 摘要 lark_md 元素应包含总市值变化的颜色高亮
+    lark_md_contents = [
+        el["text"]["content"]
+        for el in msg.elements
+        if el.get("tag") == "div" and el.get("text", {}).get("tag") == "lark_md"
+    ]
+    joined = "\n".join(lark_md_contents)
+    assert "<font color='green'>+$100,000,000 (+11.11%)</font>" in joined
 
 
-def test_filing_notification_escapes_pipe_in_security_name():
-    """证券名包含 ``|`` 时应转义，避免破坏 markdown 表格结构。"""
+def test_filing_notification_preserves_pipe_in_security_name():
+    """证券名包含 ``|`` 时不应被转义（飞书原生表格已隔离单元格）。"""
     from datetime import datetime
 
     msg = NotificationBuilder.build_new_filing_notification(
@@ -402,16 +466,14 @@ def test_filing_notification_escapes_pipe_in_security_name():
         ],
     )
 
-    # ``|`` 应被转义为 ``\|``
-    assert "Foo \\| Bar Corp" in msg.content
+    assert msg.elements is not None
+    table = next(el for el in msg.elements if el.get("tag") == "table")
+    # 不再使用 markdown 表格，``|`` 在单元格中原样保留
+    assert table["rows"][0]["security"] == "Foo | Bar Corp"
 
 
-def test_feishu_markdown_payload_uses_interactive_card():
-    """飞书 payload 应使用 interactive 卡片，并以 lark_md 渲染 Markdown。
-
-    切换为交互式卡片可同时支持表格与 ``<font color>`` 高亮，是 issue #8
-    优化的基础。回归测试需保证 schema 稳定。
-    """
+def test_feishu_payload_uses_card_v2_with_native_body():
+    """飞书 payload 应使用 Card 2.0 schema 与 ``body.elements`` 结构。"""
     notifier = FeishuWebhookNotifier("https://example.com")
     msg = NotificationMessage(
         title="测试",
@@ -422,26 +484,53 @@ def test_feishu_markdown_payload_uses_interactive_card():
 
     assert payload["msg_type"] == "interactive"
     card = payload["card"]
+    assert card["schema"] == "2.0"
     assert card["config"]["wide_screen_mode"] is True
     assert card["header"]["title"]["tag"] == "plain_text"
     assert card["header"]["title"]["content"] == "测试"
 
-    elements = card["elements"]
+    body = card["body"]
+    assert body["direction"] == "vertical"
+    elements = body["elements"]
     assert elements, "卡片至少应包含一个元素"
-    body = elements[0]
-    assert body["tag"] == "div"
-    assert body["text"]["tag"] == "lark_md"
-    # 原始 Markdown 内容应原样传递给 lark_md（包含 **bold** 与链接）。
-    assert "**重点**" in body["text"]["content"]
-    assert "[详情](https://example.com)" in body["text"]["content"]
+
+    first = elements[0]
+    assert first["tag"] == "div"
+    assert first["text"]["tag"] == "lark_md"
+    assert "**重点**" in first["text"]["content"]
+    assert "[详情](https://example.com)" in first["text"]["content"]
+
+
+def test_feishu_payload_uses_message_elements_when_provided():
+    """若 ``NotificationMessage.elements`` 提供，应直接作为卡片正文。"""
+    notifier = FeishuWebhookNotifier("https://example.com")
+    custom_elements = [
+        {"tag": "div", "text": {"tag": "lark_md", "content": "Hello"}},
+        {
+            "tag": "table",
+            "columns": [
+                {"name": "a", "display_name": "A", "data_type": "text"},
+            ],
+            "rows": [{"a": "1"}],
+        },
+    ]
+    msg = NotificationMessage(
+        title="结构化",
+        content="fallback text",
+        elements=custom_elements,
+    )
+
+    payload = notifier._build_payload(msg)
+    body_elements = payload["card"]["body"]["elements"]
+    assert body_elements == custom_elements
 
 
 def test_feishu_payload_handles_empty_content():
-    """空 content 时应回退到占位文本，避免空 content 字段被飞书拒绝。"""
+    """空 content 且无 elements 时应回退到占位文本。"""
     notifier = FeishuWebhookNotifier("https://example.com")
     msg = NotificationMessage(title="标题", content="")
 
     payload = notifier._build_payload(msg)
-    body = payload["card"]["elements"][0]
+    body = payload["card"]["body"]["elements"][0]
     assert body["text"]["tag"] == "lark_md"
     assert body["text"]["content"], "空内容应回退为非空占位"
