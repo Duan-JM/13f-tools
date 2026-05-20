@@ -228,30 +228,190 @@ def test_build_service_start_notification():
     assert "60" in msg.content
 
 
-def test_feishu_markdown_parsing():
-    """测试飞书 Markdown 解析"""
-    notifier = FeishuWebhookNotifier("https://example.com")
+def test_filing_notification_highlights_filing_date():
+    """issue #8：申报日期应使用颜色高亮，并附带星期，降低看错风险。"""
+    from datetime import datetime
 
-    # 测试粗体：飞书自定义机器人不支持 style 字段，
-    # 解析结果应为纯 text 节点，且不包含 ``style`` key。
-    result = notifier._parse_markdown_to_feishu("普通文本 **粗体文本** 普通文本")
-    assert len(result) == 1
-    assert len(result[0]) == 3
-    for node in result[0]:
-        assert node["tag"] == "text"
-        assert "style" not in node
+    msg = NotificationBuilder.build_new_filing_notification(
+        fund_name="测试基金",
+        cik="0001234567",
+        quarter="2024Q3",
+        filing_date=datetime(2024, 11, 14),
+        total_value=1_000_000_000,
+        holdings_count=100,
+    )
 
-    # 测试链接
-    result = notifier._parse_markdown_to_feishu("查看 [链接](https://example.com)")
-    assert len(result) == 1
-    # 应包含文本和链接
-    has_link = any(item.get("tag") == "a" for item in result[0])
-    assert has_link
+    # 申报日期使用红色高亮
+    assert "<font color='red'>" in msg.content
+    assert "2024-11-14" in msg.content
+    # 周四 (2024-11-14) 应附带星期标签
+    assert "周四" in msg.content
 
 
-def test_feishu_payload_has_no_unsupported_style_field():
-    """回归测试：飞书 payload 不应包含 ``style`` 字段，
-    否则会触发 ``params error, unknown content value``。"""
+def test_filing_notification_distinguishes_period_and_filing_dates():
+    """issue #8：报告期截止日期与申报日期应清晰区分，避免混淆。"""
+    from datetime import datetime
+
+    msg = NotificationBuilder.build_new_filing_notification(
+        fund_name="测试基金",
+        cik="0001234567",
+        quarter="2024Q3",
+        filing_date=datetime(2024, 11, 14),
+        total_value=1_000_000_000,
+        holdings_count=100,
+        period_end_date=datetime(2024, 9, 30),
+    )
+
+    assert "报告期" in msg.content
+    assert "申报日期" in msg.content
+    # 报告期截止日期应展示真实的 period_end_date
+    assert "2024-09-30" in msg.content
+    # 申报日期与报告期截止日期均出现，且不应彼此混用
+    assert "2024-11-14" in msg.content
+
+
+def test_filing_notification_falls_back_to_quarter_end_date():
+    """未提供 ``period_end_date`` 时应按自然季度末展示。"""
+    from datetime import datetime
+
+    msg = NotificationBuilder.build_new_filing_notification(
+        fund_name="测试基金",
+        cik="0001234567",
+        quarter="2024Q3",
+        filing_date=datetime(2024, 11, 14),
+        total_value=1_000_000_000,
+        holdings_count=100,
+    )
+
+    assert "2024-09-30" in msg.content
+
+
+def test_filing_notification_renders_top_holdings_as_table():
+    """issue #8：主要持仓应使用 Markdown 表格呈现。"""
+    from datetime import datetime
+
+    msg = NotificationBuilder.build_new_filing_notification(
+        fund_name="测试基金",
+        cik="0001234567",
+        quarter="2024Q3",
+        filing_date=datetime(2024, 11, 14),
+        total_value=1_000_000_000,
+        holdings_count=100,
+        top_holdings=[
+            {
+                "name": "Alphabet Inc",
+                "security_class": "CLASS A",
+                "value": 80_000_000,
+                "percentage": 8.0,
+            }
+        ],
+    )
+
+    # Markdown 表头与分隔线
+    assert "| # | 证券 | 市值 (USD) | 占比 |" in msg.content
+    assert "| --- | --- | --- | --- |" in msg.content
+    # 表格中的条目
+    assert "| 1 | Alphabet Inc (CLASS A) | $80,000,000 | 8.00% |" in msg.content
+
+
+def test_filing_notification_renders_change_categories_as_tables():
+    """issue #8：增持/减持等持仓变动应使用表格呈现，并对市值变化高亮。"""
+    from datetime import datetime
+
+    changes_summary = {
+        "from_quarter": "2024Q2",
+        "to_quarter": "2024Q3",
+        "total_prev_value": 900_000_000,
+        "total_curr_value": 1_000_000_000,
+        "total_value_change": 100_000_000,
+        "total_percentage_change": 11.11,
+        "counts": {"new": 1, "closed": 1, "increased": 1, "decreased": 1},
+        "new": [
+            {
+                "name": "Amazon.com Inc",
+                "security_class": "COM",
+                "value": 75_000_000,
+                "percentage": 7.5,
+            }
+        ],
+        "closed": [
+            {"name": "Tesla Inc", "security_class": "COM", "prev_value": 20_000_000}
+        ],
+        "increased": [
+            {
+                "name": "Microsoft Corporation",
+                "security_class": "COM",
+                "prev_value": 90_000_000,
+                "curr_value": 120_000_000,
+                "value_change": 30_000_000,
+                "percentage_change": 33.33,
+            }
+        ],
+        "decreased": [
+            {
+                "name": "Apple Inc.",
+                "security_class": "COM",
+                "prev_value": 180_000_000,
+                "curr_value": 150_000_000,
+                "value_change": -30_000_000,
+                "percentage_change": -16.67,
+            }
+        ],
+    }
+
+    msg = NotificationBuilder.build_new_filing_notification(
+        fund_name="测试基金",
+        cik="0001234567",
+        quarter="2024Q3",
+        filing_date=datetime(2024, 11, 14),
+        total_value=1_000_000_000,
+        holdings_count=100,
+        changes_summary=changes_summary,
+    )
+
+    # 各分类均应渲染为 markdown 表格
+    assert "| # | 证券 | 市值 (USD) | 占比 |" in msg.content
+    assert "| # | 证券 | 前期市值 (USD) |" in msg.content
+    assert "| # | 证券 | 市值变化 (USD) | 占比变化 |" in msg.content
+
+    # 总市值正向变化应使用绿色高亮，减持的负向变化应使用红色高亮
+    assert "<font color='green'>+$100,000,000 (+11.11%)</font>" in msg.content
+    assert "<font color='red'>-$30,000,000</font>" in msg.content
+    # 增持的正向变化也应使用绿色高亮
+    assert "<font color='green'>+$30,000,000</font>" in msg.content
+
+
+def test_filing_notification_escapes_pipe_in_security_name():
+    """证券名包含 ``|`` 时应转义，避免破坏 markdown 表格结构。"""
+    from datetime import datetime
+
+    msg = NotificationBuilder.build_new_filing_notification(
+        fund_name="测试基金",
+        cik="0001234567",
+        quarter="2024Q3",
+        filing_date=datetime(2024, 11, 14),
+        total_value=1_000_000_000,
+        holdings_count=1,
+        top_holdings=[
+            {
+                "name": "Foo | Bar Corp",
+                "security_class": None,
+                "value": 10_000_000,
+                "percentage": 1.0,
+            }
+        ],
+    )
+
+    # ``|`` 应被转义为 ``\|``
+    assert "Foo \\| Bar Corp" in msg.content
+
+
+def test_feishu_markdown_payload_uses_interactive_card():
+    """飞书 payload 应使用 interactive 卡片，并以 lark_md 渲染 Markdown。
+
+    切换为交互式卡片可同时支持表格与 ``<font color>`` 高亮，是 issue #8
+    优化的基础。回归测试需保证 schema 稳定。
+    """
     notifier = FeishuWebhookNotifier("https://example.com")
     msg = NotificationMessage(
         title="测试",
@@ -259,22 +419,29 @@ def test_feishu_payload_has_no_unsupported_style_field():
     )
 
     payload = notifier._build_payload(msg)
-    paragraphs = payload["content"]["post"]["zh_cn"]["content"]
 
-    assert paragraphs, "payload content 不应为空"
-    for paragraph in paragraphs:
-        for node in paragraph:
-            assert "style" not in node, f"节点不应包含 style 字段: {node}"
-            assert node["tag"] in {"text", "a", "at", "img"}
+    assert payload["msg_type"] == "interactive"
+    card = payload["card"]
+    assert card["config"]["wide_screen_mode"] is True
+    assert card["header"]["title"]["tag"] == "plain_text"
+    assert card["header"]["title"]["content"] == "测试"
+
+    elements = card["elements"]
+    assert elements, "卡片至少应包含一个元素"
+    body = elements[0]
+    assert body["tag"] == "div"
+    assert body["text"]["tag"] == "lark_md"
+    # 原始 Markdown 内容应原样传递给 lark_md（包含 **bold** 与链接）。
+    assert "**重点**" in body["text"]["content"]
+    assert "[详情](https://example.com)" in body["text"]["content"]
 
 
 def test_feishu_payload_handles_empty_content():
-    """空 content 时应回退到占位文本，避免空 content 数组导致 webhook 报错。"""
+    """空 content 时应回退到占位文本，避免空 content 字段被飞书拒绝。"""
     notifier = FeishuWebhookNotifier("https://example.com")
     msg = NotificationMessage(title="标题", content="")
 
     payload = notifier._build_payload(msg)
-    paragraphs = payload["content"]["post"]["zh_cn"]["content"]
-
-    assert paragraphs, "空内容应回退为至少一个段落"
-    assert paragraphs[0][0]["tag"] == "text"
+    body = payload["card"]["elements"][0]
+    assert body["text"]["tag"] == "lark_md"
+    assert body["text"]["content"], "空内容应回退为非空占位"
