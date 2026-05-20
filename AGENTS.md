@@ -106,6 +106,16 @@ and they all run through a shared `ctx.obj` that carries the SEC `user_agent`.
 
 ### Key patterns
 
+- **Data units (DO NOT CHANGE)**: `Holding.market_value` and
+  `Holdings.total_value` are stored in **US dollars**. The SEC 13F
+  Information Table `<value>` element (and the equivalent "Value" column
+  in HTML/TXT fallbacks) is filed in dollars — **never** multiply it by
+  1000 in any parser. A prior version assumed "thousands of dollars" and
+  scaled values by 1000, inflating every market value 1000×. The
+  regression is locked down by
+  `tests/test_data_fetcher.py::test_market_value_is_in_dollars_not_thousands_*`.
+  If those tests fail, the fix is to update the **code**, not the test —
+  do not restore any `* 1000` scaling.
 - **Configuration**: Two-tier — `config.ini` (via `configparser`,
   loaded by `config.py`) for SEC fetcher settings, and a YAML file for
   the monitor service. `python-dotenv` is available for env-var overrides.
