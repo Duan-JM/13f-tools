@@ -4,21 +4,118 @@ Webhook 通知模块
 实现飞书等平台的 webhook 消息推送
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import requests
 from loguru import logger
 
+# 飞书 lark_md 支持的颜色名称
+_FEISHU_COLOR_RED = "red"
+_FEISHU_COLOR_GREEN = "green"
+_FEISHU_COLOR_GREY = "grey"
+
+# 中文星期标签，用于在通知中明确申报日期星期，降低看错日期的风险。
+_WEEKDAY_LABELS_ZH = ("一", "二", "三", "四", "五", "六", "日")
+
+
+def _format_filing_date(filing_date: datetime) -> str:
+    """格式化申报日期：``2024-11-14（周四）``。"""
+    weekday = _WEEKDAY_LABELS_ZH[filing_date.weekday()]
+    return f"{filing_date.strftime('%Y-%m-%d')}（周{weekday}）"
+
+
+def _quarter_end_date(quarter: str) -> Optional[str]:
+    """根据 ``YYYYQN`` 推断报告期截止日期（自然季度末）。"""
+    if not quarter or "Q" not in quarter:
+        return None
+    try:
+        year_str, q_str = quarter.split("Q", 1)
+        year = int(year_str)
+        q = int(q_str)
+    except (ValueError, AttributeError):
+        return None
+    quarter_ends = {1: "03-31", 2: "06-30", 3: "09-30", 4: "12-31"}
+    if q not in quarter_ends:
+        return None
+    return f"{year}-{quarter_ends[q]}"
+
+
+def _wrap_color(text: str, color: str) -> str:
+    """用 ``<font color='...'>`` 包裹文本以在飞书卡片中高亮显示。"""
+    return f"<font color='{color}'>{text}</font>"
+
+
+def _escape_table_cell(value: str) -> str:
+    """转义飞书原生表格单元格中的换行符，避免破坏布局。
+
+    飞书原生表格 ``lark_md`` 单元格遇到换行会展开为多行，对账户名
+    一般无意义。``|`` 字符在原生表格中可以原样保留，无需转义。
+    """
+    return value.replace("\n", " ")
+
+
+def _lark_md_div(content: str) -> Dict[str, Any]:
+    """构造一个 ``div`` + ``lark_md`` 卡片元素。"""
+    return {
+        "tag": "div",
+        "text": {
+            "tag": "lark_md",
+            "content": content,
+        },
+    }
+
+
+def _hr_element() -> Dict[str, Any]:
+    """构造一个分割线元素。"""
+    return {"tag": "hr"}
+
+
+def _table_element(
+    columns: List[Dict[str, Any]], rows: List[Dict[str, str]]
+) -> Dict[str, Any]:
+    """构造一个飞书原生 ``table`` 元素。
+
+    使用 Card 2.0 ``table`` 组件，``columns`` 通过 ``name`` 与每一行
+    的 ``rows`` 字段绑定，单元格内容根据列的 ``data_type``（``text``
+    / ``lark_md``）渲染。
+
+    Args:
+        columns: 列定义，至少包含 ``name`` / ``display_name`` /
+            ``data_type``，可选 ``width`` / ``horizontal_align``。
+        rows: 行数据，键名对应 ``columns[*].name``。
+
+    Returns:
+        飞书 ``table`` 元素 JSON。
+    """
+    return {
+        "tag": "table",
+        "row_height": "low",
+        "header_style": {
+            "background_style": "grey",
+            "bold": True,
+            "text_align": "center",
+        },
+        "columns": columns,
+        "rows": rows,
+    }
+
 
 @dataclass
 class NotificationMessage:
-    """通知消息"""
+    """通知消息
+
+    ``content`` 为 lark_md 文本，用于不需要结构化排版的通知（如服务
+    启动 / 错误提示）。``elements`` 为可选的卡片元素列表，若提供则
+    直接作为 Card 2.0 ``body.elements`` 发送，可承载原生 ``table``
+    等富组件。
+    """
 
     title: str
     content: str
     timestamp: Optional[datetime] = None
+    elements: Optional[List[Dict[str, Any]]] = field(default=None)
 
     def __post_init__(self):
         if self.timestamp is None:
@@ -98,93 +195,50 @@ class FeishuWebhookNotifier(WebhookNotifier):
         """
         构建飞书消息负载
 
+        使用飞书 Card 2.0 schema（``schema: "2.0"`` + ``body.elements``），
+        以支持原生 ``table`` 组件、列对齐、``lark_md`` 单元格等富文本能力。
+        若 ``message.elements`` 已提供则直接作为卡片正文使用；否则回退
+        到单个 ``div`` + ``lark_md`` 元素，以兼容仅有文本内容的通知
+        （如服务启动、错误提示）。
+
         Args:
             message: 通知消息
 
         Returns:
-            dict: 飞书消息 JSON
+            dict: 飞书卡片消息 JSON
         """
-        content = self._parse_markdown_to_feishu(message.content)
-        # 飞书自定义机器人 post 消息要求 content 至少包含一个段落，
-        # 否则会返回 "params error, unknown content value"。
-        if not content:
-            content = [[{"tag": "text", "text": message.content or " "}]]
-
         title = message.title or " "
 
-        return {
-            "msg_type": "post",
-            "content": {
-                "post": {
-                    "zh_cn": {
-                        "title": title,
+        if message.elements is not None:
+            elements: List[Dict[str, Any]] = list(message.elements)
+        else:
+            # lark_md 内容为空时，飞书会拒绝渲染，回退到一个占位符。
+            content = (message.content or "").strip() or " "
+            elements = [
+                {
+                    "tag": "div",
+                    "text": {
+                        "tag": "lark_md",
                         "content": content,
-                    }
+                    },
                 }
+            ]
+
+        return {
+            "msg_type": "interactive",
+            "card": {
+                "schema": "2.0",
+                "config": {"wide_screen_mode": True},
+                "header": {
+                    "title": {"tag": "plain_text", "content": title},
+                    "template": "blue",
+                },
+                "body": {
+                    "direction": "vertical",
+                    "elements": elements,
+                },
             },
         }
-
-    def _parse_markdown_to_feishu(self, markdown_text: str) -> List[List[Dict]]:
-        """
-        将简单的 Markdown 文本转换为飞书富文本格式
-
-        飞书自定义机器人 ``post`` 消息的 ``text`` 标签只接受 ``text`` 与
-        ``un_escape`` 字段，不支持 ``style`` 等扩展字段，否则会触发
-        ``params error, unknown content value`` 错误。因此这里仅生成符合
-        官方文档规范的字段，``**bold**`` 标记会被解析为普通文本节点。
-
-        Args:
-            markdown_text: Markdown 文本
-
-        Returns:
-            list: 飞书富文本内容
-        """
-        import re
-
-        link_pattern = re.compile(r"\[([^\]]+)\]\(([^\)]+)\)")
-
-        content: List[List[Dict]] = []
-        lines = (markdown_text or "").strip().split("\n")
-
-        for line in lines:
-            if not line.strip():
-                continue
-
-            paragraph: List[Dict] = []
-
-            # 解析行内粗体标记 (**text**)，飞书自定义机器人不支持 style 字段，
-            # 因此只保留文本内容，去除 ``**`` 标记。
-            parts = line.split("**")
-            for part in parts:
-                if not part:
-                    continue
-
-                # 处理链接 [text](url)
-                last_end = 0
-                for match in link_pattern.finditer(part):
-                    if match.start() > last_end:
-                        paragraph.append(
-                            {
-                                "tag": "text",
-                                "text": part[last_end : match.start()],
-                            }
-                        )
-                    paragraph.append(
-                        {
-                            "tag": "a",
-                            "text": match.group(1),
-                            "href": match.group(2),
-                        }
-                    )
-                    last_end = match.end()
-
-                if last_end < len(part):
-                    paragraph.append({"tag": "text", "text": part[last_end:]})
-
-            if paragraph:
-                content.append(paragraph)
-
-        return content
 
     def send_test_message(self) -> bool:
         """
@@ -221,15 +275,21 @@ class NotificationBuilder:
         top_holdings: Optional[List[Dict]] = None,
         report_url: Optional[str] = None,
         changes_summary: Optional[Dict[str, Any]] = None,
+        period_end_date: Optional[datetime] = None,
     ) -> NotificationMessage:
         """
         构建新 13F 报告通知
+
+        构造的卡片包含一段 ``div`` 摘要（基金/CIK/报告期/申报日期/总
+        持仓值/持仓数）以及若干飞书原生 ``table`` 组件（主要持仓、
+        新增 / 清仓 / 增持 / 减持 五类）。所有数值列右对齐，证券名
+        与变化列采用 ``lark_md`` 单元格以保留颜色高亮与链接。
 
         Args:
             fund_name: 基金名称
             cik: CIK 编号
             quarter: 季度
-            filing_date: 申报日期
+            filing_date: 申报日期（提交至 SEC 的日期）
             total_value: 总持仓价值
             holdings_count: 持仓数量
             top_holdings: 前几大持仓
@@ -268,68 +328,255 @@ class NotificationBuilder:
                         ...
                     ],
                 }
+            period_end_date: 报告期截止日期（持仓 as-of 日期）。若未提供，
+                将根据 ``quarter`` 推断自然季度末。该参数与 ``filing_date``
+                一同明确呈现，避免阅读者混淆两个日期。
 
         Returns:
             NotificationMessage: 通知消息
         """
         title = f"📊 {fund_name} 发布了新的 13F 报告"
 
-        content_parts = [
+        # 优先使用真实的报告期截止日；否则按自然季度末推断。
+        period_end_str: Optional[str]
+        if period_end_date is not None:
+            period_end_str = period_end_date.strftime("%Y-%m-%d")
+        else:
+            period_end_str = _quarter_end_date(quarter)
+
+        period_line = f"📅 **报告期**: `{quarter}`"
+        if period_end_str:
+            period_line += f"（持仓截至 {period_end_str}）"
+
+        filing_line = "🔴 **申报日期**: " + _wrap_color(
+            f"**{_format_filing_date(filing_date)}**", _FEISHU_COLOR_RED
+        )
+
+        summary_lines = [
             f"**基金**: {fund_name}",
-            f"**CIK**: {cik}",
-            f"**季度**: {quarter}",
-            f"**申报日期**: {filing_date.strftime('%Y-%m-%d')}",
-            f"**总持仓价值**: ${total_value:,.0f}",
-            f"**持仓股票数**: {holdings_count}",
+            f"**CIK**: `{cik}`",
+            period_line,
+            filing_line,
+            f"💼 **总持仓价值**: ${total_value:,.0f}",
+            f"📊 **持仓股票数**: {holdings_count}",
         ]
 
+        elements: List[Dict[str, Any]] = [
+            _lark_md_div("\n".join(summary_lines)),
+        ]
+
+        # 文本回退（content 字段），用于非飞书通知端或测试断言；与
+        # 卡片正文保持等价的可读形式（不含 markdown 表格管道）。
+        content_parts: List[str] = list(summary_lines)
+
         if top_holdings:
-            content_parts.append("\n**当前主要持仓**:")
-            for i, holding in enumerate(top_holdings, 1):
-                name = NotificationBuilder._format_security_label(
-                    holding.get("name", ""), holding.get("security_class")
-                )
-                value = holding.get("value", 0)
-                percentage = holding.get("percentage", 0)
-                content_parts.append(f"{i}. {name}: ${value:,.0f} ({percentage:.2f}%)")
+            elements.append(_hr_element())
+            elements.append(_lark_md_div("**当前主要持仓**"))
+            elements.append(NotificationBuilder._build_holdings_table(top_holdings))
+            content_parts.append("")
+            content_parts.append("**当前主要持仓**")
+            content_parts.extend(NotificationBuilder._holdings_text_lines(top_holdings))
 
         if changes_summary:
-            content_parts.extend(
-                NotificationBuilder._format_changes_summary(changes_summary)
+            change_elements, change_text_lines = (
+                NotificationBuilder._build_changes_elements(changes_summary)
             )
+            elements.extend(change_elements)
+            content_parts.extend(change_text_lines)
 
         if report_url:
-            content_parts.append(f"\n[查看完整报告]({report_url})")
+            elements.append(_hr_element())
+            elements.append(_lark_md_div(f"[查看完整报告]({report_url})"))
+            content_parts.append("")
+            content_parts.append(f"[查看完整报告]({report_url})")
 
         content = "\n".join(content_parts)
 
-        return NotificationMessage(title=title, content=content)
+        return NotificationMessage(title=title, content=content, elements=elements)
 
     @staticmethod
-    def _format_changes_summary(changes_summary: Dict[str, Any]) -> List[str]:
-        """将持仓变动摘要格式化为消息行。"""
+    def _build_holdings_table(items: List[Dict]) -> Dict[str, Any]:
+        """构造 ``当前主要持仓`` / ``新增持仓`` 的飞书原生表格元素。"""
+        columns = [
+            {
+                "name": "idx",
+                "display_name": "#",
+                "data_type": "text",
+                "width": "80px",
+                "horizontal_align": "right",
+            },
+            {
+                "name": "security",
+                "display_name": "证券",
+                "data_type": "lark_md",
+                "width": "auto",
+                "horizontal_align": "left",
+            },
+            {
+                "name": "value",
+                "display_name": "市值 (USD)",
+                "data_type": "text",
+                "width": "auto",
+                "horizontal_align": "right",
+            },
+            {
+                "name": "percentage",
+                "display_name": "占比",
+                "data_type": "text",
+                "width": "80px",
+                "horizontal_align": "right",
+            },
+        ]
+        rows: List[Dict[str, str]] = []
+        for i, item in enumerate(items, 1):
+            name = _escape_table_cell(
+                NotificationBuilder._format_security_label(
+                    item.get("name", ""), item.get("security_class")
+                )
+            )
+            value = item.get("value", 0) or 0
+            percentage = item.get("percentage", 0) or 0
+            rows.append(
+                {
+                    "idx": str(i),
+                    "security": name,
+                    "value": f"${value:,.0f}",
+                    "percentage": f"{percentage:.2f}%",
+                }
+            )
+        return _table_element(columns, rows)
+
+    @staticmethod
+    def _build_closed_table(items: List[Dict]) -> Dict[str, Any]:
+        """构造 ``清仓持仓`` 的飞书原生表格元素。"""
+        columns = [
+            {
+                "name": "idx",
+                "display_name": "#",
+                "data_type": "text",
+                "width": "80px",
+                "horizontal_align": "right",
+            },
+            {
+                "name": "security",
+                "display_name": "证券",
+                "data_type": "lark_md",
+                "width": "auto",
+                "horizontal_align": "left",
+            },
+            {
+                "name": "prev_value",
+                "display_name": "前期市值 (USD)",
+                "data_type": "text",
+                "width": "auto",
+                "horizontal_align": "right",
+            },
+        ]
+        rows: List[Dict[str, str]] = []
+        for i, item in enumerate(items, 1):
+            name = _escape_table_cell(
+                NotificationBuilder._format_security_label(
+                    item.get("name", ""), item.get("security_class")
+                )
+            )
+            prev_value = item.get("prev_value", 0) or 0
+            rows.append(
+                {
+                    "idx": str(i),
+                    "security": name,
+                    "prev_value": f"${prev_value:,.0f}",
+                }
+            )
+        return _table_element(columns, rows)
+
+    @staticmethod
+    def _build_change_table(items: List[Dict], color: str) -> Dict[str, Any]:
+        """构造 ``增持`` / ``减持`` 表格，市值变化用 lark_md 颜色高亮。"""
+        columns = [
+            {
+                "name": "idx",
+                "display_name": "#",
+                "data_type": "text",
+                "width": "80px",
+                "horizontal_align": "right",
+            },
+            {
+                "name": "security",
+                "display_name": "证券",
+                "data_type": "lark_md",
+                "width": "auto",
+                "horizontal_align": "left",
+            },
+            {
+                "name": "value_change",
+                "display_name": "市值变化 (USD)",
+                "data_type": "lark_md",
+                "width": "auto",
+                "horizontal_align": "right",
+            },
+            {
+                "name": "percentage_change",
+                "display_name": "占比变化",
+                "data_type": "text",
+                "width": "100px",
+                "horizontal_align": "right",
+            },
+        ]
+        rows: List[Dict[str, str]] = []
+        for i, item in enumerate(items, 1):
+            name = _escape_table_cell(
+                NotificationBuilder._format_security_label(
+                    item.get("name", ""), item.get("security_class")
+                )
+            )
+            value_change = item.get("value_change", 0) or 0
+            percentage_change = item.get("percentage_change", 0) or 0
+            sign = "+" if value_change >= 0 else "-"
+            value_text = f"{sign}${abs(value_change):,.0f}"
+            rows.append(
+                {
+                    "idx": str(i),
+                    "security": name,
+                    "value_change": _wrap_color(value_text, color),
+                    "percentage_change": f"{percentage_change:+.2f}%",
+                }
+            )
+        return _table_element(columns, rows)
+
+    @staticmethod
+    def _build_changes_elements(
+        changes_summary: Dict[str, Any],
+    ) -> tuple[List[Dict[str, Any]], List[str]]:
+        """构造持仓变动相关的卡片元素与等价文本行。"""
         from_quarter = changes_summary.get("from_quarter", "")
         to_quarter = changes_summary.get("to_quarter", "")
         counts = changes_summary.get("counts", {}) or {}
 
-        header = "\n**相对上一季度的持仓变动**"
+        header = "**相对上一季度的持仓变动**"
         if from_quarter and to_quarter:
             header += f" ({from_quarter} → {to_quarter})"
         header += ":"
 
-        lines: List[str] = [header]
+        summary_lines: List[str] = [header]
 
         total_value_change = changes_summary.get("total_value_change")
         total_percentage_change = changes_summary.get("total_percentage_change")
         if total_value_change is not None and total_percentage_change is not None:
             sign = "+" if total_value_change >= 0 else "-"
-            lines.append(
-                "**总市值变化**: "
+            change_text = (
                 f"{sign}${abs(total_value_change):,.0f} "
                 f"({total_percentage_change:+.2f}%)"
             )
+            color = (
+                _FEISHU_COLOR_GREEN
+                if total_value_change > 0
+                else (
+                    _FEISHU_COLOR_RED if total_value_change < 0 else _FEISHU_COLOR_GREY
+                )
+            )
+            summary_lines.append("**总市值变化**: " + _wrap_color(change_text, color))
 
-        lines.append(
+        summary_lines.append(
             "**变动概览**: "
             f"新增 {counts.get('new', 0)} / "
             f"清仓 {counts.get('closed', 0)} / "
@@ -337,55 +584,103 @@ class NotificationBuilder:
             f"减持 {counts.get('decreased', 0)}"
         )
 
+        elements: List[Dict[str, Any]] = [
+            _hr_element(),
+            _lark_md_div("\n".join(summary_lines)),
+        ]
+
+        # 文本回退（content）以空行起始与摘要保持视觉分隔。
+        text_lines: List[str] = [""] + summary_lines
+
         new_items = changes_summary.get("new") or []
         if new_items:
-            lines.append("\n**新增持仓**:")
-            for i, item in enumerate(new_items, 1):
-                name = NotificationBuilder._format_security_label(
-                    item.get("name", ""), item.get("security_class")
-                )
-                value = item.get("value", 0)
-                percentage = item.get("percentage", 0)
-                lines.append(f"{i}. {name}: ${value:,.0f} ({percentage:.2f}%)")
+            elements.append(_lark_md_div("**🆕 新增持仓**"))
+            elements.append(NotificationBuilder._build_holdings_table(new_items))
+            text_lines.append("")
+            text_lines.append("**🆕 新增持仓**")
+            text_lines.extend(NotificationBuilder._holdings_text_lines(new_items))
 
         closed_items = changes_summary.get("closed") or []
         if closed_items:
-            lines.append("\n**清仓持仓**:")
-            for i, item in enumerate(closed_items, 1):
-                name = NotificationBuilder._format_security_label(
-                    item.get("name", ""), item.get("security_class")
-                )
-                prev_value = item.get("prev_value", 0)
-                lines.append(f"{i}. {name}: ${prev_value:,.0f}")
+            elements.append(_lark_md_div("**🚫 清仓持仓**"))
+            elements.append(NotificationBuilder._build_closed_table(closed_items))
+            text_lines.append("")
+            text_lines.append("**🚫 清仓持仓**")
+            text_lines.extend(NotificationBuilder._closed_text_lines(closed_items))
 
         increased_items = changes_summary.get("increased") or []
         if increased_items:
-            lines.append("\n**增持持仓**:")
-            for i, item in enumerate(increased_items, 1):
-                name = NotificationBuilder._format_security_label(
-                    item.get("name", ""), item.get("security_class")
+            elements.append(_lark_md_div("**📈 增持持仓**"))
+            elements.append(
+                NotificationBuilder._build_change_table(
+                    increased_items, _FEISHU_COLOR_GREEN
                 )
-                value_change = item.get("value_change", 0)
-                percentage_change = item.get("percentage_change", 0)
-                lines.append(
-                    f"{i}. {name}: +${value_change:,.0f} "
-                    f"({percentage_change:+.2f}%)"
+            )
+            text_lines.append("")
+            text_lines.append("**📈 增持持仓**")
+            text_lines.extend(
+                NotificationBuilder._change_text_lines(
+                    increased_items, _FEISHU_COLOR_GREEN
                 )
+            )
 
         decreased_items = changes_summary.get("decreased") or []
         if decreased_items:
-            lines.append("\n**减持持仓**:")
-            for i, item in enumerate(decreased_items, 1):
-                name = NotificationBuilder._format_security_label(
-                    item.get("name", ""), item.get("security_class")
+            elements.append(_lark_md_div("**📉 减持持仓**"))
+            elements.append(
+                NotificationBuilder._build_change_table(
+                    decreased_items, _FEISHU_COLOR_RED
                 )
-                value_change = item.get("value_change", 0)
-                percentage_change = item.get("percentage_change", 0)
-                lines.append(
-                    f"{i}. {name}: -${abs(value_change):,.0f} "
-                    f"({percentage_change:+.2f}%)"
+            )
+            text_lines.append("")
+            text_lines.append("**📉 减持持仓**")
+            text_lines.extend(
+                NotificationBuilder._change_text_lines(
+                    decreased_items, _FEISHU_COLOR_RED
                 )
+            )
 
+        return elements, text_lines
+
+    @staticmethod
+    def _holdings_text_lines(items: List[Dict]) -> List[str]:
+        """``当前主要持仓`` / ``新增持仓`` 在文本回退中的项目行。"""
+        lines: List[str] = []
+        for i, item in enumerate(items, 1):
+            name = NotificationBuilder._format_security_label(
+                item.get("name", ""), item.get("security_class")
+            )
+            value = item.get("value", 0) or 0
+            percentage = item.get("percentage", 0) or 0
+            lines.append(f"{i}. {name} — ${value:,.0f} ({percentage:.2f}%)")
+        return lines
+
+    @staticmethod
+    def _closed_text_lines(items: List[Dict]) -> List[str]:
+        lines: List[str] = []
+        for i, item in enumerate(items, 1):
+            name = NotificationBuilder._format_security_label(
+                item.get("name", ""), item.get("security_class")
+            )
+            prev_value = item.get("prev_value", 0) or 0
+            lines.append(f"{i}. {name} — ${prev_value:,.0f}")
+        return lines
+
+    @staticmethod
+    def _change_text_lines(items: List[Dict], color: str) -> List[str]:
+        lines: List[str] = []
+        for i, item in enumerate(items, 1):
+            name = NotificationBuilder._format_security_label(
+                item.get("name", ""), item.get("security_class")
+            )
+            value_change = item.get("value_change", 0) or 0
+            percentage_change = item.get("percentage_change", 0) or 0
+            sign = "+" if value_change >= 0 else "-"
+            value_text = f"{sign}${abs(value_change):,.0f}"
+            lines.append(
+                f"{i}. {name} — {_wrap_color(value_text, color)} "
+                f"({percentage_change:+.2f}%)"
+            )
         return lines
 
     @staticmethod

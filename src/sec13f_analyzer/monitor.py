@@ -278,6 +278,7 @@ class SEC13FMonitor:
                 top_holdings=top_holdings,
                 report_url=report_url,
                 changes_summary=changes_summary,
+                period_end_date=holdings.period_end_date,
             )
 
             # 发送通知
