@@ -1,7 +1,18 @@
 """
 SEC 13F数据获取模块
 
-从SEC EDGAR数据库获取13F报告数据
+从SEC EDGAR数据库获取13F报告数据。
+
+单位约定（重要 - 请勿修改）::
+
+    SEC 13F Information Table 中 ``<value>`` 字段（HTML/TXT 表格里通常名为
+    "Value" 列）以 **美元** 为单位填报，**不要** 在解析阶段乘以 1000。
+    历史上仓库曾错误地以"千美元"为前提乘 1000，导致所有市值被放大 1000 倍。
+    单位假设由 :mod:`tests.test_data_fetcher` 中的回归测试
+    ``test_market_value_is_in_dollars_not_thousands`` 强制守护。
+
+    Holding.market_value 与 Holdings.total_value 在整个代码库中均以美元
+    存储，下游 exporter/visualizer/notifier 都直接当美元展示。
 """
 
 import re
@@ -1084,9 +1095,9 @@ class SEC13FDataFetcher:
                                 else "COM"
                             )
                             shares_owned = int(shares_elem.text)
-                            market_value = (
-                                float(value_elem.text) * 1000
-                            )  # SEC以千美元为单位
+                            # SEC 13F <value> 字段单位为美元，直接使用原始值，
+                            # 不得乘以 1000。详见模块顶部"单位约定"。
+                            market_value = float(value_elem.text)
 
                             # 投票权信息
                             sole_elem = entry.find(
@@ -1250,10 +1261,10 @@ class SEC13FDataFetcher:
                                         int(shares_text) if shares_text.isdigit() else 0
                                     )
                                     market_value = (
-                                        float(value_text) * 1000
+                                        float(value_text)
                                         if value_text.replace(".", "").isdigit()
                                         else 0.0
-                                    )
+                                    )  # 单位：美元（详见模块顶部"单位约定"）
 
                                     if shares_owned > 0 and market_value > 0:
                                         holding = Holding(
@@ -1331,7 +1342,9 @@ class SEC13FDataFetcher:
                                 if shares_owned == 0:
                                     shares_owned = int(part)
                                 elif market_value == 0:
-                                    market_value = float(part) * 1000  # 千美元转美元
+                                    # 单位：美元，禁止乘以 1000
+                                    # （详见模块顶部"单位约定"）
+                                    market_value = float(part)
 
                         if cusip and issuer_name and shares_owned > 0:
                             holding = Holding(

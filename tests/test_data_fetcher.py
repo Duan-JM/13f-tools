@@ -151,8 +151,12 @@ class TestSEC13FDataFetcher:
         assert holdings[0].cusip == "037833100"
         assert holdings[0].issuer_name == "APPLE INC"
         assert holdings[0].shares_owned == 1000000
-        assert holdings[0].market_value == 150000000.0  # 乘以1000
-        assert total_value == 150000000.0
+        # SEC 13F <value> 单位为美元，禁止乘以 1000。
+        # 输入 <value>150000</value> => 150000.0 美元。
+        # 历史上此断言曾被错误写为 150_000_000.0（隐含 *1000），
+        # 形成"错误代码↔错误测试"互锁，请勿恢复。
+        assert holdings[0].market_value == 150000.0
+        assert total_value == 150000.0
         assert period_end_date == datetime(2024, 9, 30)
 
     def test_parse_xml_holdings_rejects_unsafe_entities(self, fetcher):
@@ -202,7 +206,8 @@ class TestSEC13FDataFetcher:
 
         assert len(holdings) == 1
         assert holdings[0].issuer_name == "APPLE INC"
-        assert total_value == 150000000.0
+        # 输入 <value>150000</value> => 150000.0 美元（不缩放）
+        assert total_value == 150000.0
         assert period_end_date == datetime(2024, 9, 30)
 
     def test_parse_xml_holdings_from_html_pre(self, fetcher):
@@ -227,7 +232,8 @@ class TestSEC13FDataFetcher:
 
         assert len(holdings) == 1
         assert holdings[0].cusip == "594918104"
-        assert total_value == 120000.0
+        # 输入 <value>120</value> => 120.0 美元（不缩放）
+        assert total_value == 120.0
         assert period_end_date is None
 
     def test_parse_html_table_holdings(self, fetcher):
@@ -250,8 +256,9 @@ class TestSEC13FDataFetcher:
         assert len(holdings) == 1
         assert holdings[0].cusip == "037833100"
         assert holdings[0].shares_owned == 1000
-        assert holdings[0].market_value == 150000.0
-        assert total_value == 150000.0
+        # 输入 "$150" => 150.0 美元（不缩放）
+        assert holdings[0].market_value == 150.0
+        assert total_value == 150.0
         assert period_end_date is None
 
     def test_parse_txt_holdings(self, fetcher):
@@ -269,10 +276,91 @@ class TestSEC13FDataFetcher:
 
         assert len(holdings) == 2
         assert holdings[0].issuer_name == "APPLE INC"
-        assert total_value == 270000.0
+        # 输入 value 列分别为 150 和 120 => 150 + 120 = 270.0 美元（不缩放）
+        assert total_value == 270.0
         assert period_end_date == datetime(2024, 9, 30)
 
-    def test_request_rate_limiting(self, fetcher):
+    # ------------------------------------------------------------------
+    # 单位回归测试 —— 防止 "* 1000" 错误回归
+    # ------------------------------------------------------------------
+    #
+    # 历史背景:
+    #   仓库最初版本在三个 parser 路径中错误地把 <value> 字段乘以 1000，
+    #   注释写着 "SEC以千美元为单位"。这是错误的：SEC 13F Information Table
+    #   的 <value> 字段以 **美元** 为单位填报，用户人工对账确认。
+    #
+    #   错误一度无法被根除，原因是测试断言里也硬编码了乘 1000 后的值，
+    #   形成 "错误代码 ↔ 错误测试" 互锁回路：每次有人去掉 *1000，CI
+    #   就因为旧测试断言失败而变红，下一个 AI agent 就把 *1000 加回去。
+    #
+    # 这些测试用一个不可能被误读为"千美元"的大数值作为不变量，
+    # 明确并永久地把"美元单位"约定写入测试。**请勿恢复任何缩放**。
+
+    def test_market_value_is_in_dollars_not_thousands_xml(self, fetcher):
+        """XML parser: <value> 字段必须按美元原样使用，不得乘以 1000。"""
+        raw_value = 123456789  # 选这个值是因为 *1000 之后会变得明显荒谬
+        xml_content = f"""<?xml version="1.0"?>
+        <informationTable>
+            <reportCalendarOrQuarter>09-30-2024</reportCalendarOrQuarter>
+            <infoTable>
+                <cusip>037833100</cusip>
+                <nameOfIssuer>APPLE INC</nameOfIssuer>
+                <titleOfClass>COM</titleOfClass>
+                <sshPrnamt>1000</sshPrnamt>
+                <value>{raw_value}</value>
+            </infoTable>
+        </informationTable>"""
+
+        holdings, total_value, _ = fetcher._parse_xml_holdings(xml_content)
+
+        assert len(holdings) == 1
+        assert holdings[0].market_value == float(raw_value)
+        assert total_value == float(raw_value)
+        # 显式断言"未被缩放"
+        assert holdings[0].market_value != float(raw_value) * 1000
+        # 衍生字段 price_per_share 也应该是基于美元的真实价格
+        assert holdings[0].price_per_share == float(raw_value) / 1000
+
+    def test_market_value_is_in_dollars_not_thousands_html_table(self, fetcher):
+        """HTML 表格 parser: Value 列必须按美元原样使用，不得乘以 1000。"""
+        raw_value = 987654321
+        html_content = f"""
+        <html>
+          <table>
+            <tr>
+              <th>CUSIP</th><th>Name of Issuer</th><th>Shares</th><th>Value</th>
+            </tr>
+            <tr>
+              <td>037833100</td><td>APPLE INC</td><td>1,000</td>
+              <td>${raw_value}</td>
+            </tr>
+          </table>
+        </html>
+        """
+
+        holdings, total_value, _ = fetcher._parse_html_table(html_content)
+
+        assert len(holdings) == 1
+        assert holdings[0].market_value == float(raw_value)
+        assert total_value == float(raw_value)
+        assert holdings[0].market_value != float(raw_value) * 1000
+
+    def test_market_value_is_in_dollars_not_thousands_txt(self, fetcher):
+        """TXT parser: Value 列必须按美元原样使用，不得乘以 1000。"""
+        raw_value = 987654321
+        txt_content = f"""
+        Report period ended 09/30/2024
+        CUSIP       Name of Issuer       Shares       Value
+        037833100   APPLE INC            1000         {raw_value}
+        """
+
+        holdings, total_value, _ = fetcher._parse_txt_holdings(txt_content)
+
+        assert len(holdings) == 1
+        assert holdings[0].market_value == float(raw_value)
+        assert total_value == float(raw_value)
+        assert holdings[0].market_value != float(raw_value) * 1000
+
         """测试请求频率限制"""
         import time
 

@@ -57,7 +57,7 @@ class Holdings:
     fund_name: str
     quarter: str
     period_end_date: datetime
-    total_value: float  # 总持仓价值
+    total_value: float  # 总持仓价值，单位：美元
     holdings: List[Holding]
     filing_date: Optional[datetime] = None
     is_amendment: bool = False  # 是否为修订版本
