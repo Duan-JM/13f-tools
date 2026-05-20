@@ -9,7 +9,7 @@ import signal
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Set
 
 from loguru import logger
 
@@ -25,7 +25,27 @@ from .notifier import (
 
 
 class MonitorState:
-    """监控状态管理"""
+    """监控状态管理。
+
+    状态文件按 CIK 维度组织，结构示例::
+
+        {
+            "0001067983": {
+                "last_check": "2025-05-20T12:00:00",
+                "last_quarter": "2024Q4",
+                "seen_accessions": [
+                    "0000950123-25-001234",
+                    "0000950123-25-005678"
+                ]
+            }
+        }
+
+    - ``last_check``: 上一次 ``_check_portfolio`` 的时间（人读用）
+    - ``last_quarter``: 最近一次成功通知所对应的 ``report_quarter``
+      （仅用作旧逻辑兼容与迁移 cutoff，不再参与判新）
+    - ``seen_accessions``: 已经处理过的 accession 列表（去重 + 通知判新
+      的唯一稳定 key；同一 accession 永不重复通知）
+    """
 
     def __init__(self, state_file: str):
         """
@@ -110,6 +130,51 @@ class MonitorState:
 
         self._save_state()
 
+    def has_cik(self, cik: str) -> bool:
+        """该 CIK 是否在状态文件中已有任何记录（含历史）。"""
+        return cik in self.state
+
+    def get_seen_accessions(self, cik: str) -> List[str]:
+        """获取该 CIK 已处理过的 accession 列表。"""
+        if cik not in self.state:
+            return []
+        seen = self.state[cik].get("seen_accessions", [])
+        return list(seen) if isinstance(seen, list) else []
+
+    def mark_accessions_seen(self, cik: str, accessions: Iterable[str]) -> None:
+        """把若干 accession 标记为已处理，去重后写回状态文件。
+
+        Args:
+            cik: CIK 编号
+            accessions: 待标记的 accession 集合（``None`` 项会被忽略）
+        """
+        new_items = [a for a in accessions if a]
+        if not new_items:
+            return
+
+        if cik not in self.state:
+            self.state[cik] = {}
+        existing: List[str] = self.state[cik].get("seen_accessions", []) or []
+        if not isinstance(existing, list):
+            existing = []
+        merged: List[str] = list(existing)
+        existing_set: Set[str] = set(existing)
+        for acc in new_items:
+            if acc not in existing_set:
+                merged.append(acc)
+                existing_set.add(acc)
+        self.state[cik]["seen_accessions"] = merged
+        self._save_state()
+
+    def has_seen_accessions(self, cik: str) -> bool:
+        """该 CIK 的状态中是否已经存在 ``seen_accessions`` 键。
+
+        用于区分"全新 CIK"、"刚从旧 schema 迁移"和"正常增量"。
+        """
+        if cik not in self.state:
+            return False
+        return "seen_accessions" in self.state[cik]
+
 
 class SEC13FMonitor:
     """13F 监控服务"""
@@ -154,144 +219,335 @@ class SEC13FMonitor:
 
         return notifiers
 
-    def _send_notification(self, message: NotificationMessage):
+    def _send_notification(self, message: NotificationMessage) -> bool:
         """
         发送通知到所有启用的 webhook
 
         Args:
             message: 通知消息
+
+        Returns:
+            bool: 至少有一个 notifier 成功发送时为 ``True``；全部失败
+            （或没有任何 notifier）时为 ``False``。调用方可据此判断是否
+            应该把 filing 标记为已处理——失败时不应标记，避免漏推。
         """
+        if not self.notifiers:
+            logger.warning("没有可用的 webhook 通知器，跳过发送")
+            return False
+
+        any_success = False
         for notifier in self.notifiers:
             try:
                 notifier.send(message)
+                any_success = True
             except Exception as e:
                 logger.error(f"发送通知失败: {e}")
+        return any_success
+
+    def _resolve_filing_quarter(self, filing: Dict[str, Any]) -> str:
+        """返回 filing 应归属的报告期季度字符串。
+
+        优先使用 fetcher 在 ``resolve_period_of_report=True`` 下填入的
+        ``report_quarter``（基于真实 ``periodOfReport``），缺失时回退到
+        基于 ``filing_date`` 的近似值。
+        """
+        rq = filing.get("report_quarter")
+        if isinstance(rq, str) and rq:
+            return rq
+        return str(filing["quarter"])
+
+    def _migrate_legacy_state(self, cik: str, filings: List[Dict[str, Any]]) -> None:
+        """对旧版本写入的状态做一次性迁移。
+
+        旧实现只记录 ``last_quarter``，不区分单份 accession。升级到新
+        逻辑后，第一次轮询时把 ``report_quarter <= last_quarter`` 的所
+        有 accession 直接标记已见，避免在升级瞬间把过去 2 年的报告全
+        部当成"新"再推一遍。
+
+        **取舍**：这同时意味着之前被旧 bug 吞掉的 HR/A 修订不会被回溯
+        补推。这是有意的——避免升级时一次性灌水更重要。
+
+        Args:
+            cik: CIK 编号
+            filings: 当前 EDGAR 上的报告列表（已含 accession_number）
+        """
+        if self.state.has_seen_accessions(cik):
+            return
+
+        last_quarter = self.state.get_last_quarter(cik)
+        if not last_quarter:
+            return
+
+        migrate_accessions: List[str] = []
+        for filing in filings:
+            accession = filing.get("accession_number")
+            if not accession:
+                continue
+            if self._resolve_filing_quarter(filing) <= last_quarter:
+                migrate_accessions.append(accession)
+
+        if migrate_accessions:
+            logger.info(
+                f"CIK {cik} 旧状态迁移：将 {len(migrate_accessions)} 份"
+                f" report_quarter ≤ {last_quarter} 的 accession 标记已见"
+            )
+            self.state.mark_accessions_seen(cik, migrate_accessions)
+        else:
+            # 即便没有要迁移的条目，也写一个空 list 表明已完成迁移，
+            # 防止下一轮再次走 legacy 分支。
+            self.state.mark_accessions_seen(cik, [])
+            if cik in self.state.state:
+                self.state.state[cik].setdefault("seen_accessions", [])
+                self.state._save_state()
+
+    def _gate_first_run(self, cik: str, filings: List[Dict[str, Any]]) -> None:
+        """全新 CIK 首次轮询时，只保留最新一份 filing 作为可推送对象。
+
+        把列表里除最新一份外的所有 accession 直接标记为 seen，避免在
+        首次启动时一次性把过去 2 年的报告都推到 webhook。
+
+        Args:
+            cik: CIK 编号
+            filings: 已按 ``filing_date`` 降序排列的 filing 列表
+        """
+        if self.state.has_cik(cik):
+            return
+        if len(filings) <= 1:
+            # 只有 0 或 1 份 filing，没有需要"压制"的历史项
+            self.state.mark_accessions_seen(cik, [])
+            return
+
+        # 跳过 filings[0]（最新一份），其余全部标记 seen
+        skipped: List[str] = [
+            f["accession_number"] for f in filings[1:] if f.get("accession_number")
+        ]
+        if skipped:
+            logger.info(
+                f"CIK {cik} 首次启动：跳过历史 {len(skipped)} 份 filing，"
+                "仅对最新一份发送通知"
+            )
+            self.state.mark_accessions_seen(cik, skipped)
+        else:
+            self.state.mark_accessions_seen(cik, [])
 
     def _check_portfolio(self, portfolio: PortfolioConfig) -> bool:
         """
         检查单个投资组合
 
+        新流程（按 accession 幂等去重）：
+
+        1. 取最近若干年 13F filings（带 ``accession_number`` 与
+           ``report_quarter``）。
+        2. 对全新 CIK 做"首跑门控"，对旧 schema 状态做一次性迁移。
+        3. 找出未见 accession，按 ``report_quarter`` 分组——同一报告期
+           即便包含原始 HR + 多个 HR/A，也只发一条通知，但通知会标记
+           "修订"且通过 ``use_cache=False`` 强制取最新合并后的持仓。
+        4. 每个季度组发送通知；只有发送成功才把组内 accession 标记
+           seen，避免 webhook 故障时永久丢失通知。
+
         Args:
             portfolio: 投资组合配置
 
         Returns:
-            bool: 是否发现新报告
+            bool: 是否实际发送了至少一条新通知。
         """
         try:
             logger.info(f"检查 {portfolio.name} (CIK: {portfolio.cik}) 的 13F 报告...")
 
-            # 获取最近的 13F 报告列表，覆盖至少两年的窗口，
-            # 以便定位最新报告对应的上一季度报告。
-            filings = self.analyzer.data_fetcher.get_13f_filings(portfolio.cik, years=2)
+            filings = self.analyzer.data_fetcher.get_13f_filings(
+                portfolio.cik, years=2, resolve_period_of_report=True
+            )
 
             if not filings:
                 logger.info(f"未找到 {portfolio.name} 的 13F 报告")
-                return False
-
-            # 获取最新的报告
-            latest_filing = filings[0]
-            latest_quarter = latest_filing["quarter"]
-            filing_date = latest_filing["filing_date"]
-
-            # 检查是否是新报告
-            last_quarter = self.state.get_last_quarter(portfolio.cik)
-
-            if last_quarter == latest_quarter:
-                logger.debug(f"{portfolio.name} 没有新报告（最新: {latest_quarter}）")
                 self.state.update(portfolio.cik)
                 return False
 
-            # 检查报告日期是否足够新
-            last_check = self.state.get_last_check(portfolio.cik)
-            if last_check:
-                days_since_last = (datetime.now() - last_check).days
-                if days_since_last < portfolio.min_report_days:
-                    logger.debug(
-                        f"{portfolio.name} 距上次检查仅 {days_since_last} 天，跳过"
-                    )
-                    return False
+            # filings 由 fetcher 按 filing_date 降序排列
+            self._migrate_legacy_state(portfolio.cik, filings)
+            self._gate_first_run(portfolio.cik, filings)
 
-            logger.info(
-                f"发现 {portfolio.name} 的新报告: {latest_quarter} "
-                f"(申报日期: {filing_date.strftime('%Y-%m-%d')})"
-            )
+            seen = set(self.state.get_seen_accessions(portfolio.cik))
+            unseen = [
+                f
+                for f in filings
+                if f.get("accession_number") and f["accession_number"] not in seen
+            ]
 
-            # 获取持仓详情
-            holdings = self.analyzer.get_holdings(portfolio.cik, latest_quarter)
-
-            if not holdings:
-                logger.warning(f"无法获取 {portfolio.name} 的持仓数据")
+            if not unseen:
+                logger.debug(f"{portfolio.name} 没有新 filing")
+                self.state.update(portfolio.cik)
                 return False
 
-            # 构建通知
-            top_holdings = None
-            if self.config.notification.include_holdings_summary:
-                max_count = self.config.notification.max_holdings_in_summary
-                top_holdings_list = self.analyzer.get_top_holdings(
-                    portfolio.cik, latest_quarter, max_count
+            # 按 report_quarter 分组；同一季度合并成一条通知
+            grouped: Dict[str, List[Dict[str, Any]]] = {}
+            for f in unseen:
+                q = self._resolve_filing_quarter(f)
+                grouped.setdefault(q, []).append(f)
+
+            any_notified = False
+            latest_quarter_notified: Optional[str] = None
+
+            # 季度从新到旧依次处理；同季度内按 filing_date 升序
+            for quarter in sorted(grouped.keys(), reverse=True):
+                group = sorted(grouped[quarter], key=lambda x: x["filing_date"])
+                notified = self._notify_for_quarter(
+                    portfolio=portfolio,
+                    quarter=quarter,
+                    group_filings=group,
+                    all_filings=filings,
                 )
+                if notified:
+                    any_notified = True
+                    if (
+                        latest_quarter_notified is None
+                        or quarter > latest_quarter_notified
+                    ):
+                        latest_quarter_notified = quarter
 
-                if top_holdings_list:
-                    top_holdings = []
-                    for holding in top_holdings_list:
-                        percentage = (holding.market_value / holdings.total_value) * 100
-                        top_holdings.append(
-                            {
-                                "name": holding.issuer_name,
-                                "security_class": holding.security_class,
-                                "value": holding.market_value,
-                                "percentage": percentage,
-                            }
-                        )
-
-            # 计算与上一季度的持仓变动
-            changes_summary: Optional[Dict[str, Any]] = None
-            if self.config.notification.include_changes_summary:
-                prev_quarter = self._find_previous_quarter(filings, latest_quarter)
-                if prev_quarter:
-                    changes_summary = self._build_changes_summary(
-                        portfolio.cik,
-                        prev_quarter,
-                        latest_quarter,
-                        holdings.total_value,
-                    )
-                else:
-                    logger.info(
-                        f"{portfolio.name} 未找到上一季度报告，跳过持仓变动摘要"
-                    )
-
-            # 报告链接
-            report_url = None
-            if self.config.notification.include_report_link:
-                report_url = (
-                    "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany"
-                    f"&CIK={portfolio.cik}&type=13F&dateb=&owner=exclude&count=10"
-                )
-
-            message = NotificationBuilder.build_new_filing_notification(
-                fund_name=portfolio.name,
-                cik=portfolio.cik,
-                quarter=latest_quarter,
-                filing_date=filing_date,
-                total_value=holdings.total_value,
-                holdings_count=len(holdings.holdings),
-                top_holdings=top_holdings,
-                report_url=report_url,
-                changes_summary=changes_summary,
-                period_end_date=holdings.period_end_date,
-            )
-
-            # 发送通知
-            self._send_notification(message)
-
-            # 更新状态
-            self.state.update(portfolio.cik, latest_quarter)
-
-            return True
+            self.state.update(portfolio.cik, latest_quarter_notified)
+            return any_notified
 
         except Exception as e:
             logger.error(f"检查 {portfolio.name} 时出错: {e}")
             return False
+
+    def _notify_for_quarter(
+        self,
+        portfolio: PortfolioConfig,
+        quarter: str,
+        group_filings: List[Dict[str, Any]],
+        all_filings: List[Dict[str, Any]],
+    ) -> bool:
+        """对单个季度的一组未见 filing 发送一次通知。
+
+        Args:
+            portfolio: 投资组合配置
+            quarter: ``report_quarter``（``YYYYQN``）
+            group_filings: 本次需要处理的同季度未见 filing 集合
+            all_filings: 当前轮询拉到的全量 filings（用于推算上一季度）
+
+        Returns:
+            bool: 是否成功发送（任一 webhook 返回成功）。成功时 group
+            内所有 accession 会被标记 seen。
+        """
+        # 判定本次通知是"新报告"还是"修订报告"——只要本季度此前已经
+        # 推送过任何 accession，或本批 filings 中含修订件，就视为修订。
+        seen = set(self.state.get_seen_accessions(portfolio.cik))
+        prior_for_quarter = any(
+            f.get("accession_number") in seen
+            and self._resolve_filing_quarter(f) == quarter
+            for f in all_filings
+        )
+        in_group_amendment = any(f.get("is_amendment") for f in group_filings)
+        is_amendment_notification = prior_for_quarter or in_group_amendment
+
+        # 取最新一份作为通知主体的 filing_date 来源
+        latest_in_group = max(group_filings, key=lambda f: f["filing_date"])
+        filing_date = latest_in_group["filing_date"]
+
+        logger.info(
+            f"发现 {portfolio.name} 的{'修订' if is_amendment_notification else '新'}"
+            f"报告: {quarter}（{len(group_filings)} 份 filing，最新提交日 "
+            f"{filing_date.strftime('%Y-%m-%d')}）"
+        )
+
+        # 强制不走缓存，确保修订件能拿到最新合并状态
+        holdings = self.analyzer.get_holdings(portfolio.cik, quarter, use_cache=False)
+        if not holdings:
+            logger.warning(f"无法获取 {portfolio.name} {quarter} 的持仓数据")
+            return False
+
+        top_holdings = None
+        if self.config.notification.include_holdings_summary:
+            max_count = self.config.notification.max_holdings_in_summary
+            top_holdings_list = self.analyzer.get_top_holdings(
+                portfolio.cik, quarter, max_count
+            )
+            if top_holdings_list:
+                top_holdings = []
+                for holding in top_holdings_list:
+                    percentage = (
+                        (holding.market_value / holdings.total_value) * 100
+                        if holdings.total_value
+                        else 0.0
+                    )
+                    top_holdings.append(
+                        {
+                            "name": holding.issuer_name,
+                            "security_class": holding.security_class,
+                            "value": holding.market_value,
+                            "percentage": percentage,
+                        }
+                    )
+
+        changes_summary: Optional[Dict[str, Any]] = None
+        if self.config.notification.include_changes_summary:
+            prev_quarter = self._find_previous_quarter(all_filings, quarter)
+            if prev_quarter:
+                changes_summary = self._build_changes_summary(
+                    portfolio.cik,
+                    prev_quarter,
+                    quarter,
+                    holdings.total_value,
+                )
+            else:
+                logger.info(f"{portfolio.name} 未找到上一季度报告，跳过持仓变动摘要")
+
+        report_url = None
+        if self.config.notification.include_report_link:
+            report_url = (
+                "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany"
+                f"&CIK={portfolio.cik}&type=13F&dateb=&owner=exclude&count=10"
+            )
+
+        amendment_types: Optional[List[str]] = None
+        amendment_numbers: Optional[List[int]] = None
+        if is_amendment_notification:
+            # 收集本批 filings 中含有的修订元信息（amendment_info 由
+            # data_fetcher.get_holdings_data 在解析时填入 holdings）
+            amendment_types = []
+            amendment_numbers = []
+            for meta in holdings.amendment_metadata or []:
+                if meta.amendment_type is not None:
+                    amendment_types.append(meta.amendment_type.value)
+                if meta.amendment_number is not None:
+                    amendment_numbers.append(meta.amendment_number)
+            amendment_types = amendment_types or None
+            amendment_numbers = amendment_numbers or None
+
+        message = NotificationBuilder.build_new_filing_notification(
+            fund_name=portfolio.name,
+            cik=portfolio.cik,
+            quarter=quarter,
+            filing_date=filing_date,
+            total_value=holdings.total_value,
+            holdings_count=len(holdings.holdings),
+            top_holdings=top_holdings,
+            report_url=report_url,
+            changes_summary=changes_summary,
+            period_end_date=holdings.period_end_date,
+            is_amendment=is_amendment_notification,
+            amendment_types=amendment_types,
+            amendment_numbers=amendment_numbers,
+        )
+
+        success = self._send_notification(message)
+        if success:
+            self.state.mark_accessions_seen(
+                portfolio.cik,
+                [
+                    f["accession_number"]
+                    for f in group_filings
+                    if f.get("accession_number")
+                ],
+            )
+        else:
+            logger.warning(
+                f"{portfolio.name} {quarter} 通知全部 webhook 失败，"
+                "保留未见标记，下一轮重试"
+            )
+        return success
 
     @staticmethod
     def _find_previous_quarter(

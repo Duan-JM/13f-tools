@@ -439,3 +439,161 @@ class TestSEC13FDataFetcher:
 
         assert len(results) == 1
         assert results[0] == ("0001234567", "Test Fund")
+
+
+class TestAccessionNumberExtraction:
+    """测试 ``_extract_accession_number`` 工具方法。
+
+    accession_number 是监控服务做幂等去重的稳定 key，提取必须能覆盖
+    EDGAR URL 在实际网页里出现的两种主要形式（dashed 与 18 位无连字符
+    目录名）。
+    """
+
+    @pytest.mark.parametrize(
+        "url,expected",
+        [
+            (
+                "https://www.sec.gov/Archives/edgar/data/1067983/"
+                "000095012324012345/0000950123-24-012345-index.htm",
+                "0000950123-24-012345",
+            ),
+            (
+                "/Archives/edgar/data/1067983/0000950123-24-012345/"
+                "0000950123-24-012345-index.htm",
+                "0000950123-24-012345",
+            ),
+            (
+                "https://www.sec.gov/Archives/edgar/data/1067983/000095012324012345/",
+                "0000950123-24-012345",
+            ),
+            ("https://example.com/no/accession/here", None),
+            ("", None),
+        ],
+    )
+    def test_extract_accession_number(self, url, expected):
+        assert SEC13FDataFetcher._extract_accession_number(url) == expected
+
+
+class TestQuarterFromPeriodEnd:
+    """``_quarter_from_period_end`` 必须把任意月份映射到正确季度。"""
+
+    @pytest.mark.parametrize(
+        "period_end,expected",
+        [
+            (datetime(2024, 3, 31), "2024Q1"),
+            (datetime(2024, 6, 30), "2024Q2"),
+            (datetime(2024, 9, 30), "2024Q3"),
+            (datetime(2024, 12, 31), "2024Q4"),
+            (datetime(2025, 1, 15), "2025Q1"),
+        ],
+    )
+    def test_quarter_from_period_end(self, period_end, expected):
+        assert SEC13FDataFetcher._quarter_from_period_end(period_end) == expected
+
+
+class TestGet13FFilingsEnrichment:
+    """``get_13f_filings`` 应当总是填 ``accession_number``，并在显式
+    开启 ``resolve_period_of_report`` 时填 ``report_quarter``。"""
+
+    @pytest.fixture
+    def fetcher(self):
+        return SEC13FDataFetcher(user_agent="Test-Agent/1.0")
+
+    @responses.activate
+    def test_get_13f_filings_populates_accession_number(self, fetcher):
+        recent_year = datetime.now().year - 1
+        filing_date = f"{recent_year}-11-14"
+        mock_response = f"""
+        <html>
+        <table class="tableFile2">
+            <tr><th>1</th><th>2</th><th>3</th><th>4</th></tr>
+            <tr>
+                <td>13F-HR</td>
+                <td><a href="/Archives/edgar/data/1067983/000095012324012345/0000950123-24-012345-index.htm">Documents</a></td>
+                <td>Quarterly report filed by institutional managers</td>
+                <td>{filing_date}</td>
+            </tr>
+        </table>
+        </html>
+        """
+        responses.add(
+            responses.GET,
+            "https://www.sec.gov/cgi-bin/browse-edgar",
+            body=mock_response,
+            status=200,
+        )
+
+        filings = fetcher.get_13f_filings("0001067983", years=2)
+
+        assert len(filings) == 1
+        assert filings[0]["accession_number"] == "0000950123-24-012345"
+        # 默认不解析 periodOfReport
+        assert "report_quarter" not in filings[0]
+
+    @responses.activate
+    def test_get_13f_filings_resolves_report_quarter(self, fetcher):
+        recent_year = datetime.now().year - 1
+        filing_date = f"{recent_year}-11-14"
+        mock_response = f"""
+        <html>
+        <table class="tableFile2">
+            <tr><th>1</th><th>2</th><th>3</th><th>4</th></tr>
+            <tr>
+                <td>13F-HR</td>
+                <td><a href="/Archives/edgar/data/1067983/000095012324012345/0000950123-24-012345-index.htm">Documents</a></td>
+                <td>Quarterly report filed by institutional managers</td>
+                <td>{filing_date}</td>
+            </tr>
+        </table>
+        </html>
+        """
+        responses.add(
+            responses.GET,
+            "https://www.sec.gov/cgi-bin/browse-edgar",
+            body=mock_response,
+            status=200,
+        )
+
+        # filing 详情页（含 primary_doc.xml 链接）
+        responses.add(
+            responses.GET,
+            "https://www.sec.gov/Archives/edgar/data/1067983/000095012324012345/"
+            "0000950123-24-012345-index.htm",
+            body="""
+            <html>
+            <table class="tableFile">
+                <tr><th>1</th><th>2</th><th>3</th></tr>
+                <tr>
+                    <td>1</td><td>primary_doc</td>
+                    <td><a href="/Archives/edgar/data/1067983/000095012324012345/primary_doc.xml">primary_doc.xml</a></td>
+                </tr>
+            </table>
+            </html>
+            """,
+            status=200,
+        )
+
+        # primary_doc.xml — periodOfReport 指向 2024Q3
+        responses.add(
+            responses.GET,
+            "https://www.sec.gov/Archives/edgar/data/1067983/000095012324012345/primary_doc.xml",
+            body=f"""<?xml version="1.0" encoding="UTF-8"?>
+            <edgarSubmission xmlns="http://www.sec.gov/edgar/thirteenffiler">
+                <headerData>
+                    <filerInfo>
+                        <periodOfReport>09-30-{recent_year}</periodOfReport>
+                    </filerInfo>
+                </headerData>
+            </edgarSubmission>
+            """,
+            status=200,
+            content_type="application/xml",
+        )
+
+        filings = fetcher.get_13f_filings(
+            "0001067983", years=2, resolve_period_of_report=True
+        )
+
+        assert len(filings) == 1
+        assert filings[0]["report_quarter"] == f"{recent_year}Q3"
+        assert filings[0]["period_end_date"] == datetime(recent_year, 9, 30)

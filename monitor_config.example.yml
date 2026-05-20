@@ -15,7 +15,8 @@ portfolios:
     cik: "0001067983"
     # 是否启用监控
     enabled: true
-    # 最小报告天数间隔（避免重复通知同一个季度）
+    # [已弃用] 旧版用于"两次通知最小间隔天数"，新版基于 accession_number
+    # 做幂等去重，不再使用此字段。保留仅为兼容旧配置文件。
     min_report_days: 30
 
   - name: "桥水基金"

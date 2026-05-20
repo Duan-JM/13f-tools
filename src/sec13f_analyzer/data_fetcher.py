@@ -105,6 +105,10 @@ class SEC13FDataFetcher:
         self.timeout = self.config.get_timeout()
         self.last_request_time = 0
 
+        # 每个实例缓存 accession -> periodOfReport，避免在 get_13f_filings
+        # 与 get_holdings_data 之间重复请求 primary_doc.xml
+        self._period_of_report_cache: Dict[str, Optional[datetime]] = {}
+
         logger.info(f"请求延迟: {self.request_delay}秒, 最大重试: {self.max_retries}次")
 
     def _wait_if_needed(self):
@@ -377,13 +381,145 @@ class SEC13FDataFetcher:
             logger.error(f"获取基金信息失败 CIK {cik}: {e}")
             return None
 
-    def get_13f_filings(self, cik: str, years: int = 2) -> List[Dict]:
+    @staticmethod
+    def _extract_accession_number(filing_url: str) -> Optional[str]:
+        """从 EDGAR filing URL 中提取标准 accession number。
+
+        EDGAR 在 URL 里两种形式都可能出现：
+        - ``/Archives/edgar/data/{cik}/{XXXXXXXXXXXXXXXXXX}/...``
+          （目录名 18 位无连字符）
+        - ``/Archives/edgar/data/{cik}/{XXXXXXXXXX-XX-XXXXXX}/...``
+          （已带连字符）
+        - 或在文件名里直接出现 ``XXXXXXXXXX-XX-XXXXXX-index.htm``。
+
+        本方法统一返回 dashed 形式（``XXXXXXXXXX-XX-XXXXXX``），无法
+        提取时返回 ``None``。该值用于监控服务对 13F-HR / 13F-HR/A
+        做幂等去重，是 accession 级判新的唯一稳定 key。
+
+        Args:
+            filing_url: 来自 EDGAR 搜索结果的 filing index URL
+
+        Returns:
+            dashed accession number，无法解析返回 ``None``。
+        """
+        if not filing_url:
+            return None
+
+        dashed = re.search(r"(\d{10}-\d{2}-\d{6})", filing_url)
+        if dashed:
+            return dashed.group(1)
+
+        bare = re.search(r"/Archives/edgar/data/\d+/(\d{18})(?:/|$)", filing_url)
+        if bare:
+            digits = bare.group(1)
+            return f"{digits[:10]}-{digits[10:12]}-{digits[12:18]}"
+
+        return None
+
+    def _get_period_of_report(self, filing_url: str) -> Optional[datetime]:
+        """从 primary_doc.xml 中解析报告期截止日（``<periodOfReport>``）。
+
+        13F 报告的 ``periodOfReport`` 是真正的"持仓 as-of"日期，对于
+        13F-HR/A 修订件特别重要：修订件可能在原报告之后很久才提交，
+        ``filing_date`` 反推出的季度会错位，但 ``periodOfReport`` 始终
+        指向原报告所覆盖的季度末。
+
+        Args:
+            filing_url: 13F filing 详情页 URL（``/Archives/edgar/.../-index.htm``）
+
+        Returns:
+            ``periodOfReport`` 对应的日期，解析失败时返回 ``None``。
+            结果按 accession_number 缓存到实例。
+        """
+        accession = self._extract_accession_number(filing_url)
+        cache_key = accession or filing_url
+        if cache_key in self._period_of_report_cache:
+            return self._period_of_report_cache[cache_key]
+
+        result: Optional[datetime] = None
+        try:
+            response = self._make_request(filing_url)
+            soup = BeautifulSoup(response.content, "html.parser")
+
+            primary_doc_urls = []
+            table = soup.find("table", {"class": "tableFile"})
+            if table:
+                for row in table.find_all("tr")[1:]:
+                    cells = row.find_all("td")
+                    if len(cells) >= 3:
+                        doc_link = cells[2].find("a")
+                        if doc_link:
+                            href = doc_link.get("href", "")
+                            if "primary_doc.xml" in href:
+                                full_url = urljoin(self.BASE_URL, href)
+                                if "xslForm" not in href:
+                                    primary_doc_urls.insert(0, full_url)
+                                else:
+                                    primary_doc_urls.append(full_url)
+
+            for primary_doc_url in primary_doc_urls:
+                try:
+                    doc_response = self._make_request(primary_doc_url)
+                    content_type = doc_response.headers.get("Content-Type", "").lower()
+                    if "html" in content_type:
+                        continue
+
+                    root = ET.fromstring(doc_response.content)
+                    namespaces = {
+                        "ns": "http://www.sec.gov/edgar/thirteenffiler",
+                    }
+
+                    # 先按命名空间查找，再做 namespace-agnostic 兜底
+                    elem = root.find(".//ns:periodOfReport", namespaces)
+                    if elem is None:
+                        elem = root.find(".//{*}periodOfReport")
+                    if elem is None or not elem.text:
+                        continue
+
+                    text = elem.text.strip()
+                    for fmt in ("%m-%d-%Y", "%Y-%m-%d"):
+                        try:
+                            result = datetime.strptime(text, fmt)
+                            break
+                        except ValueError:
+                            continue
+                    if result is not None:
+                        break
+                except (ET.ParseError, DefusedXmlException) as pe:
+                    logger.debug(f"primary_doc.xml 解析失败: {primary_doc_url}: {pe}")
+                    continue
+        except Exception as e:
+            logger.debug(f"获取 periodOfReport 失败 {filing_url}: {e}")
+
+        self._period_of_report_cache[cache_key] = result
+        return result
+
+    @staticmethod
+    def _quarter_from_period_end(period_end: datetime) -> str:
+        """根据报告期截止日推算 ``YYYYQN`` 季度字符串。"""
+        q = (period_end.month - 1) // 3 + 1
+        return f"{period_end.year}Q{q}"
+
+    def get_13f_filings(
+        self,
+        cik: str,
+        years: int = 2,
+        *,
+        resolve_period_of_report: bool = False,
+    ) -> List[Dict]:
         """
         获取13F报告列表
 
         Args:
             cik: 基金的CIK编号
             years: 获取多少年内的报告
+            resolve_period_of_report: 是否额外读取每份报告的
+                ``periodOfReport`` 来推算真实季度。开启后，每份 filing
+                会多一个 ``report_quarter`` 字段（``YYYYQN``）和
+                ``period_end_date`` 字段（``datetime``）。该字段对
+                13F-HR/A 修订件尤为重要：基于 ``filing_date`` 反推的
+                ``quarter`` 在修订件上会错位，``report_quarter`` 不会。
+                需要额外的 HTTP 请求，默认关闭以保持向后兼容。
 
         Returns:
             13F报告信息列表
@@ -430,17 +566,35 @@ class SEC13FDataFetcher:
                             if filing_date >= cutoff_date:
                                 # 解析季度信息
                                 quarter = self._parse_quarter_from_date(filing_date)
-
-                                filings.append(
-                                    {
-                                        "filing_date": filing_date,
-                                        "quarter": quarter,
-                                        "url": filing_url,
-                                        "description": description,
-                                        "filing_type": filing_type,
-                                        "is_amendment": is_amendment,
-                                    }
+                                accession_number = self._extract_accession_number(
+                                    filing_url
                                 )
+
+                                filing_entry: Dict = {
+                                    "filing_date": filing_date,
+                                    "quarter": quarter,
+                                    "url": filing_url,
+                                    "description": description,
+                                    "filing_type": filing_type,
+                                    "is_amendment": is_amendment,
+                                    "accession_number": accession_number,
+                                }
+
+                                if resolve_period_of_report:
+                                    period_end = self._get_period_of_report(filing_url)
+                                    if period_end is not None:
+                                        filing_entry["period_end_date"] = period_end
+                                        filing_entry["report_quarter"] = (
+                                            self._quarter_from_period_end(period_end)
+                                        )
+                                    else:
+                                        # 解析失败时回退到 filing_date 推断的季度，
+                                        # 保证下游 ``report_quarter`` 总有值，便于
+                                        # 一致地按 ``report_quarter`` 过滤。
+                                        filing_entry["period_end_date"] = None
+                                        filing_entry["report_quarter"] = quarter
+
+                                filings.append(filing_entry)
 
                         except ValueError:
                             logger.warning(f"无法解析日期: {filing_date_str}")
@@ -721,11 +875,18 @@ class SEC13FDataFetcher:
         Returns:
             Holdings对象或None
         """
-        # 首先获取13F报告列表
-        filings = self.get_13f_filings(cik, years=3)
+        # 首先获取13F报告列表（包含真实的 report_quarter，使 13F-HR/A
+        # 即便在跨时段提交时也能被路由到正确的报告期）
+        filings = self.get_13f_filings(cik, years=3, resolve_period_of_report=True)
 
-        # 找到对应季度的所有报告（包括13F-HR和13F-HR/A）
-        quarter_filings = [filing for filing in filings if filing["quarter"] == quarter]
+        # 找到对应季度的所有报告（包括13F-HR和13F-HR/A）。优先按
+        # ``report_quarter`` 过滤，``report_quarter`` 为空时回退到
+        # ``quarter`` 字段保持兼容。
+        quarter_filings = [
+            filing
+            for filing in filings
+            if filing.get("report_quarter", filing["quarter"]) == quarter
+        ]
 
         if not quarter_filings:
             logger.warning(f"未找到 CIK {cik} 在 {quarter} 的13F报告")

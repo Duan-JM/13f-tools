@@ -2,6 +2,8 @@
 测试通知器
 """
 
+from datetime import datetime
+
 import responses
 
 from sec13f_analyzer.notifier import (
@@ -608,3 +610,43 @@ def test_feishu_payload_handles_empty_content():
     body = payload["card"]["body"]["elements"][0]
     assert body["text"]["tag"] == "lark_md"
     assert body["text"]["content"], "空内容应回退为非空占位"
+
+
+def test_build_new_filing_notification_marks_amendment():
+    """``is_amendment=True`` 时，title 与摘要应明确标注"修订"。
+
+    回归 Bug B：监控发现 HR/A 修订时必须能让用户看出"这不是新季报、
+    而是对 ``2024Q3`` 的修订"，否则容易被误认为重复推送。
+    """
+    filing_date = datetime(2024, 12, 5)
+
+    msg = NotificationBuilder.build_new_filing_notification(
+        fund_name="测试基金",
+        cik="0001234567",
+        quarter="2024Q3",
+        filing_date=filing_date,
+        total_value=1_000_000_000.0,
+        holdings_count=42,
+        is_amendment=True,
+        amendment_types=["RESTATEMENT"],
+        amendment_numbers=[1],
+    )
+
+    assert "修订" in msg.title
+    assert "RESTATEMENT" in msg.content
+    assert "#1" in msg.content
+
+
+def test_build_new_filing_notification_default_title_when_not_amendment():
+    """未指定 ``is_amendment`` 时维持原标题，保证既有路径不受影响。"""
+    msg = NotificationBuilder.build_new_filing_notification(
+        fund_name="测试基金",
+        cik="0001234567",
+        quarter="2024Q3",
+        filing_date=datetime(2024, 11, 14),
+        total_value=1_000_000_000.0,
+        holdings_count=42,
+    )
+
+    assert "新的 13F 报告" in msg.title
+    assert "修订" not in msg.title

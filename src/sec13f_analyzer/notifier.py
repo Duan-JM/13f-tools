@@ -276,6 +276,9 @@ class NotificationBuilder:
         report_url: Optional[str] = None,
         changes_summary: Optional[Dict[str, Any]] = None,
         period_end_date: Optional[datetime] = None,
+        is_amendment: bool = False,
+        amendment_types: Optional[List[str]] = None,
+        amendment_numbers: Optional[List[int]] = None,
     ) -> NotificationMessage:
         """
         构建新 13F 报告通知
@@ -331,11 +334,21 @@ class NotificationBuilder:
             period_end_date: 报告期截止日期（持仓 as-of 日期）。若未提供，
                 将根据 ``quarter`` 推断自然季度末。该参数与 ``filing_date``
                 一同明确呈现，避免阅读者混淆两个日期。
+            is_amendment: 是否为 13F-HR/A 修订通知。``True`` 时标题与
+                摘要会显式标注"修订"，便于用户与原始季报区分。
+            amendment_types: 本次通知涉及的修订类型集合（如
+                ``["RESTATEMENT"]``、``["NEW HOLDINGS"]``）。仅在
+                ``is_amendment=True`` 时使用。
+            amendment_numbers: 与 ``amendment_types`` 对应的修订编号
+                集合，可能含多个（同一季度多次修订）。
 
         Returns:
             NotificationMessage: 通知消息
         """
-        title = f"📊 {fund_name} 发布了新的 13F 报告"
+        if is_amendment:
+            title = f"📋 {fund_name} 发布了 13F 修订报告"
+        else:
+            title = f"📊 {fund_name} 发布了新的 13F 报告"
 
         # 优先使用真实的报告期截止日；否则按自然季度末推断。
         period_end_str: Optional[str]
@@ -360,6 +373,31 @@ class NotificationBuilder:
             f"💼 **总持仓价值**: ${total_value:,.0f}",
             f"📊 **持仓股票数**: {holdings_count}",
         ]
+
+        if is_amendment:
+            unique_types: List[str] = []
+            for t in amendment_types or []:
+                if t and t not in unique_types:
+                    unique_types.append(t)
+            unique_numbers: List[str] = []
+            for n in amendment_numbers or []:
+                if n is None:
+                    continue
+                token = f"#{n}"
+                if token not in unique_numbers:
+                    unique_numbers.append(token)
+
+            parts: List[str] = []
+            if unique_types:
+                parts.append(" / ".join(unique_types))
+            if unique_numbers:
+                parts.append("(" + ", ".join(unique_numbers) + ")")
+            amendment_text = " ".join(parts) if parts else "13F-HR/A"
+            summary_lines.insert(
+                4,
+                "🔄 **修订**: "
+                + _wrap_color(f"**{amendment_text}**", _FEISHU_COLOR_RED),
+            )
 
         elements: List[Dict[str, Any]] = [
             _lark_md_div("\n".join(summary_lines)),

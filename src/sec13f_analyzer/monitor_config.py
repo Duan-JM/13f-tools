@@ -13,12 +13,17 @@ import yaml
 
 @dataclass
 class PortfolioConfig:
-    """投资组合配置"""
+    """投资组合配置。
+
+    .. deprecated::
+        ``min_report_days`` 字段已弃用，监控服务自 accession 级幂等去重
+        引入后不再使用该字段。保留仅为兼容旧 YAML 配置不报错。
+    """
 
     name: str
     cik: str
     enabled: bool = True
-    min_report_days: int = 30
+    min_report_days: int = 30  # deprecated, kept for backwards compat
 
 
 @dataclass
