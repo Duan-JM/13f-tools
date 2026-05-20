@@ -402,7 +402,7 @@ class NotificationBuilder:
                 "name": "idx",
                 "display_name": "#",
                 "data_type": "text",
-                "width": "60px",
+                "width": "80px",
                 "horizontal_align": "right",
             },
             {
@@ -454,7 +454,7 @@ class NotificationBuilder:
                 "name": "idx",
                 "display_name": "#",
                 "data_type": "text",
-                "width": "60px",
+                "width": "80px",
                 "horizontal_align": "right",
             },
             {
@@ -497,7 +497,7 @@ class NotificationBuilder:
                 "name": "idx",
                 "display_name": "#",
                 "data_type": "text",
-                "width": "60px",
+                "width": "80px",
                 "horizontal_align": "right",
             },
             {

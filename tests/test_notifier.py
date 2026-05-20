@@ -335,6 +335,80 @@ def test_filing_notification_renders_top_holdings_as_native_table():
     ]
 
 
+def test_filing_notification_table_columns_respect_feishu_width_limits():
+    """飞书原生 ``table`` 列宽自定义值取值范围必须落在 ``[80px, 600px]``。
+
+    Regression: 早期版本曾把 ``#`` 列设为 ``60px``，飞书 webhook 返回
+    ``ErrCode: 200912`` / ``column idx:1`` 拒收。该测试遍历通知中的
+    所有 ``table`` 列，强制非 ``auto`` / 百分比的像素宽度必须 >= 80px
+    且 <= 600px，避免再次踩坑。
+    """
+    import re
+    from datetime import datetime
+
+    changes_summary = {
+        "from_quarter": "2024Q2",
+        "to_quarter": "2024Q3",
+        "total_prev_value": 900_000_000,
+        "total_curr_value": 1_000_000_000,
+        "total_value_change": 100_000_000,
+        "total_percentage_change": 11.11,
+        "counts": {"new": 1, "closed": 1, "increased": 1, "decreased": 1},
+        "new": [{"name": "A", "security_class": "COM", "value": 1, "percentage": 0.1}],
+        "closed": [{"name": "B", "security_class": "COM", "prev_value": 1}],
+        "increased": [
+            {
+                "name": "C",
+                "security_class": "COM",
+                "prev_value": 1,
+                "curr_value": 2,
+                "value_change": 1,
+                "percentage_change": 100.0,
+            }
+        ],
+        "decreased": [
+            {
+                "name": "D",
+                "security_class": "COM",
+                "prev_value": 2,
+                "curr_value": 1,
+                "value_change": -1,
+                "percentage_change": -50.0,
+            }
+        ],
+    }
+
+    msg = NotificationBuilder.build_new_filing_notification(
+        fund_name="基金",
+        cik="0001234567",
+        quarter="2024Q3",
+        filing_date=datetime(2024, 11, 14),
+        total_value=1,
+        holdings_count=1,
+        top_holdings=[
+            {"name": "X", "security_class": "COM", "value": 1, "percentage": 0.1}
+        ],
+        changes_summary=changes_summary,
+    )
+
+    assert msg.elements is not None
+    tables = [el for el in msg.elements if el.get("tag") == "table"]
+    assert tables, "至少应有一张原生表格"
+
+    px_pattern = re.compile(r"^(\d+)px$")
+    for table in tables:
+        for col in table["columns"]:
+            width = col.get("width", "auto")
+            if width == "auto" or width.endswith("%"):
+                continue
+            match = px_pattern.match(width)
+            assert match, f"非法 width 取值 {width!r}（列 {col.get('name')!r}）"
+            px = int(match.group(1))
+            assert (
+                80 <= px <= 600
+            ), f"列 {col.get('name')!r} width={width} 超出飞书 [80px,600px] 限制"
+
+
 def test_filing_notification_renders_change_categories_as_native_tables():
     """issue #8：增持/减持等持仓变动应使用原生表格呈现，并对市值变化高亮。"""
     from datetime import datetime
