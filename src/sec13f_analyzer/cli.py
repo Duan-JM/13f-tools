@@ -12,21 +12,29 @@ from loguru import logger
 from .analyzer import SEC13FAnalyzer
 from .data_fetcher import SEC13FDataFetcher
 from .exporter import DataExporter
+from .logging_config import configure_logging
 from .monitor import SEC13FMonitor
 from .monitor_config import MonitorConfigLoader
 from .visualizer import HoldingsVisualizer
 
 
 @click.group()
-@click.option("--verbose", "-v", is_flag=True, help="启用详细输出")
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="启用详细输出（等价于 LOG_LEVEL=DEBUG，优先级高于环境变量）",
+)
 @click.option("--user-agent", default="SEC13F-Analyzer/0.1.0", help="用户代理字符串")
 @click.pass_context
 def cli(ctx, verbose, user_agent):
-    """SEC 13F持仓分析工具"""
-    # 配置日志
-    if verbose:
-        logger.remove()
-        logger.add(sys.stderr, level="DEBUG")
+    """SEC 13F持仓分析工具
+
+    日志等级可通过 ``LOG_LEVEL`` 环境变量控制（默认 ``INFO``，可选
+    ``TRACE``/``DEBUG``/``INFO``/``SUCCESS``/``WARNING``/``ERROR``/``CRITICAL``）。
+    使用 ``-v/--verbose`` 等价于设置 ``LOG_LEVEL=DEBUG``，且优先级高于环境变量。
+    """
+    configure_logging(level="DEBUG" if verbose else None)
 
     # 保存全局配置
     ctx.ensure_object(dict)

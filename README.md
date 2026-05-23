@@ -38,6 +38,23 @@ poetry run sec13f-cli --help
 
 ## 🚀 CLI使用指南
 
+### 日志等级
+
+通过 `LOG_LEVEL` 环境变量控制日志输出（默认 `INFO`，大小写不敏感），
+可选值：`TRACE` / `DEBUG` / `INFO` / `SUCCESS` / `WARNING` / `ERROR` / `CRITICAL`。
+
+```bash
+# 临时设置（仅对当前命令生效）
+LOG_LEVEL=DEBUG poetry run sec13f-cli fetch -c 0001067983 -q 2024Q3
+
+# 在当前 shell 会话中设置
+export LOG_LEVEL=WARNING
+poetry run sec13f-cli search -n "Berkshire"
+```
+
+`--verbose` / `-v` 等价于 `LOG_LEVEL=DEBUG`，且优先级高于环境变量。
+未设置 `LOG_LEVEL` 时使用默认值 `INFO`。
+
 ### 1. 搜索基金CIK
 
 ```bash

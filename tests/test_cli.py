@@ -48,6 +48,34 @@ class TestCLI:
         result = runner.invoke(cli, ["--verbose", "--help"])
         assert result.exit_code == 0
 
+    @patch("sec13f_analyzer.cli.configure_logging")
+    @patch("sec13f_analyzer.cli.SEC13FDataFetcher")
+    def test_verbose_flag_sets_debug_log_level(
+        self, mock_fetcher_class, mock_configure, runner
+    ):
+        """--verbose 应当强制配置 DEBUG 日志等级"""
+        mock_fetcher = Mock()
+        mock_fetcher_class.return_value = mock_fetcher
+        mock_fetcher.search_fund_cik.return_value = []
+
+        result = runner.invoke(cli, ["--verbose", "search", "-n", "X"])
+        assert result.exit_code == 0
+        mock_configure.assert_called_once_with(level="DEBUG")
+
+    @patch("sec13f_analyzer.cli.configure_logging")
+    @patch("sec13f_analyzer.cli.SEC13FDataFetcher")
+    def test_no_verbose_uses_env_log_level(
+        self, mock_fetcher_class, mock_configure, runner
+    ):
+        """未传 --verbose 时由环境变量/默认值决定日志等级"""
+        mock_fetcher = Mock()
+        mock_fetcher_class.return_value = mock_fetcher
+        mock_fetcher.search_fund_cik.return_value = []
+
+        result = runner.invoke(cli, ["search", "-n", "X"])
+        assert result.exit_code == 0
+        mock_configure.assert_called_once_with(level=None)
+
     @patch("sec13f_analyzer.cli.SEC13FDataFetcher")
     def test_search_command_success(self, mock_fetcher_class, runner):
         """测试搜索命令成功"""
