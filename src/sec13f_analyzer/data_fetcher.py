@@ -130,10 +130,10 @@ class SEC13FDataFetcher:
 
         for attempt in range(self.max_retries):
             try:
-                logger.info(f"尝试请求 {attempt + 1}/{self.max_retries}")
+                logger.debug(f"尝试请求 {attempt + 1}/{self.max_retries}")
                 response = self.session.get(url, params=params, timeout=self.timeout)
 
-                logger.info(f"响应状态码: {response.status_code}")
+                logger.debug(f"响应状态码: {response.status_code}")
                 logger.debug(f"响应头: {dict(response.headers)}")
 
                 # 处理403错误
@@ -153,7 +153,7 @@ class SEC13FDataFetcher:
                     )
 
                 response.raise_for_status()
-                logger.info("请求成功")
+                logger.debug("请求成功")
                 return response
 
             except requests.exceptions.HTTPError as e:
