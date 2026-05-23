@@ -134,9 +134,13 @@ and they all run through a shared `ctx.obj` that carries the SEC `user_agent`.
 - **Background work**: `SEC13FMonitor.run()` is a single-threaded polling
   loop with SIGINT/SIGTERM handlers — no Celery/queue.
 - **Logging**: `from loguru import logger` everywhere. Do **not** use
-  `print` in library code. The CLI re-configures `logger` when `--verbose`
-  is set. Prefer structured / f-string log lines with enough context to
-  diagnose failures.
+  `print` in library code. Log level is configured by
+  `sec13f_analyzer.logging_config.configure_logging`, which honors the
+  `LOG_LEVEL` env var (default `INFO`; valid values: `TRACE`, `DEBUG`,
+  `INFO`, `SUCCESS`, `WARNING`, `ERROR`, `CRITICAL`, case-insensitive).
+  The CLI calls `configure_logging` on startup; `--verbose` forces
+  `DEBUG` and takes precedence over `LOG_LEVEL`. Prefer structured /
+  f-string log lines with enough context to diagnose failures.
 - **Error handling**: Network calls are wrapped with retries inside
   `SEC13FDataFetcher`. Parsing is tolerant — malformed records are
   skipped and logged rather than crashing the batch. Missing data is
